@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -181,6 +182,37 @@ def can_gummy_translate(source: str, target: str) -> bool:
 def tts_supported_languages() -> tuple[str, ...]:
     """有可用 TTS 音色的语种。"""
     return tuple(TTS_VOICES.keys())
+
+
+_KANA = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+_HANGUL = re.compile(r"[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]")
+_HAN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+
+def looks_like_chinese(text: str) -> bool | None:
+    """判断一段识别文本是否为中文。无法判断时返回 None。
+
+    自动模式靠它决定「这句话是我说的还是对方说的」。用书写系统判断而不是
+    调用语种识别接口，是因为这几个语种分属不同的 Unicode 区块，判据是确定
+    性的，既不花钱也没有网络延迟，准确率还更高。
+
+    判断顺序不能颠倒：日文和中文共用汉字区块，所以必须先看假名。先查汉字
+    的话，「これは本です」会因为含「本」被误判成中文。
+
+    已知局限：整句只有汉字、不含任何假名的日文会被误判为中文，例如单独说
+    「東京駅」。完整句子里几乎总有助词假名，因此风险主要集中在单词级的短
+    应答上。真遇到了，切回手动模式即可。
+    """
+    if not text or not text.strip():
+        return None
+    if _KANA.search(text) or _HANGUL.search(text):
+        return False
+    if _HAN.search(text):
+        return True
+    if re.search(r"[A-Za-z\u00c0-\u024f\u0400-\u04ff]", text):
+        return False
+    # 纯数字或标点，例如「123」「？」，任何一方都可能说出来
+    return None
 
 
 def conversation_languages() -> tuple[str, ...]:

@@ -27,6 +27,7 @@ import logging
 import queue
 import threading
 from collections.abc import Callable
+from typing import Final
 
 from dashscope.audio.asr import (
     TranscriptionResult,
@@ -52,6 +53,9 @@ logger = logging.getLogger(__name__)
 SentenceHandler = Callable[[SentenceUpdate], None]
 StateHandler = Callable[[StateEvent], None]
 ErrorHandler = Callable[[ErrorEvent], None]
+
+# 等待识别连接优雅关闭的上限。超过就放弃，理由见 _safe_stop_recognizer。
+RECOGNIZER_STOP_TIMEOUT: Final = 5.0
 
 
 class ListenSession:
@@ -188,22 +192,46 @@ class ListenSession:
         self._set_state(SessionState.STOPPED)
 
     def _safe_stop_recognizer(self) -> None:
-        if self._recognizer is None:
+        recognizer = self._recognizer
+        self._recognizer = None
+        if recognizer is None:
             return
-        try:
-            # stop() 会阻塞直到服务端返回 on_complete 或 on_error
-            self._recognizer.stop()
-        except Exception:
-            logger.warning("关闭识别连接时出错", exc_info=True)
-        finally:
-            self._recognizer = None
+
+        # SDK 的 stop() 会阻塞到服务端下发 on_complete 或 on_error，且
+        # **没有超时参数**——其内部是一个无超时的 join()。服务端在网络异常
+        # 等情况下可能永远不下发结束指令，直接调用会让调用线程永久挂死。
+        # 关窗口走的就是这条路径，卡住的话整个界面会冻结，只能强杀进程。
+        # 因此放到独立线程里等一个上限，超时就放弃这条连接：它是守护线程，
+        # 进程退出时不会阻碍关闭，服务端也会在自己的超时后释放资源。
+        done = threading.Event()
+
+        def run() -> None:
+            try:
+                recognizer.stop()
+            except Exception:
+                logger.warning("关闭识别连接时出错", exc_info=True)
+            finally:
+                done.set()
+
+        threading.Thread(
+            target=run, name="realtalk-recognizer-stop", daemon=True
+        ).start()
+
+        if not done.wait(RECOGNIZER_STOP_TIMEOUT):
+            logger.warning(
+                "识别连接未在 %.0f 秒内关闭，已放弃等待", RECOGNIZER_STOP_TIMEOUT
+            )
 
     def mute(self) -> None:
-        """暂停向服务端发送音频，但保持连接不断。
+        """屏蔽麦克风输入，但保持连接不断。
 
         对话场景下必需：扬声器正在播放译文语音时，麦克风会把这段声音重新
-        收进来。识别器的源语种是固定的，这些「自己说出去的话」会被强行按
-        该语种拟合，产生乱码句子。丢弃这段音频比事后过滤可靠得多。
+        收进来，识别器会把「自己刚说出去的话」当成有人在讲，再翻译一遍。
+        丢弃这段音频比事后过滤可靠得多。
+
+        注意这里是用静音帧**替换**麦克风数据，而不是不发。服务端有 23 秒
+        无数据即断开的限制（SDK 里同样硬编码了 SILENCE_TIMEOUT_S = 23），
+        真的停发的话，一段长句子念完就可能把连接饿死。
         """
         self._muted.set()
 
@@ -219,7 +247,7 @@ class ListenSession:
         if recognizer is None or self._state is not SessionState.RUNNING:
             return
         if self._muted.is_set():
-            return
+            frame = bytes(len(frame))
         recognizer.send_audio_frame(frame)
 
     # ---- Gummy 回调的处理入口，运行在 SDK 接收线程上 ----

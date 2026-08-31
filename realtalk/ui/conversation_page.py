@@ -17,6 +17,7 @@ import threading
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -138,7 +139,6 @@ class ConversationPage(QWidget):
         self._settings = settings
         self._session: ConversationSession | None = None
         self._bubbles: dict[str, MessageBubble] = {}
-        self._pending_speaker: Speaker | None = None
 
         self._build_ui()
 
@@ -189,6 +189,14 @@ class ConversationPage(QWidget):
             self._device_combo.addItem(device.name, device.index)
         row.addWidget(self._device_combo, stretch=1)
 
+        self._auto_toggle = QCheckBox("自动识别说话人")
+        self._auto_toggle.setToolTip(
+            "开启后不必手动切换：系统按识别出的文字判断是谁在说。\n"
+            "整句只有汉字、不含假名的日文可能被误判为中文，遇到时切回手动。"
+        )
+        self._auto_toggle.toggled.connect(self._on_auto_toggled)
+        row.addWidget(self._auto_toggle)
+
         self._clear_button = QPushButton("清空")
         self._clear_button.clicked.connect(self._clear_transcript)
         row.addWidget(self._clear_button)
@@ -233,11 +241,18 @@ class ConversationPage(QWidget):
         self._my_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._my_button.clicked.connect(lambda: self._on_turn_clicked(Speaker.ME))
 
+        self._auto_button = QPushButton()
+        self._auto_button.setObjectName("TurnButton")
+        self._auto_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._auto_button.clicked.connect(self._on_auto_clicked)
+        self._auto_button.hide()
+
     def _build_turn_button_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(12)
         row.addWidget(self._foreign_button, stretch=1)
         row.addWidget(self._my_button, stretch=1)
+        row.addWidget(self._auto_button, stretch=1)
         self._refresh_turn_buttons()
         return row
 
@@ -261,19 +276,39 @@ class ConversationPage(QWidget):
     def _current_language(self) -> str:
         return self._language_combo.currentData()
 
+    def _on_auto_toggled(self, enabled: bool) -> None:
+        # 两种模式的连接参数不同（自动模式源语种为 auto），必须重建会话
+        self._teardown_session()
+        self._refresh_turn_buttons()
+        self._set_status(
+            "自动模式：双方直接说话，无需切换。"
+            if enabled
+            else "手动模式：点击按钮切换当前说话的人。",
+            TEXT_MUTED,
+        )
+
     def _on_turn_clicked(self, speaker: Speaker) -> None:
         session = self._session
         if session is not None and session.active_speaker is speaker:
-            self._run_async(session.end_turn)
+            self._run_async(session.stop)
             return
+        self._begin(lambda active: active.start_turn(speaker))
 
-        self._pending_speaker = speaker
+    def _on_auto_clicked(self) -> None:
+        session = self._session
+        if session is not None and session.is_running:
+            self._run_async(session.stop)
+            return
+        self._begin(lambda active: active.start_auto())
+
+    def _begin(self, action) -> None:  # noqa: ANN001
+        """在后台线程建立连接。start_turn / start_auto 会阻塞到握手完成，
+        放在 UI 线程会让界面卡住一两秒。"""
         self._set_controls_enabled(False)
 
         def run() -> None:
             try:
-                active = self._ensure_session()
-                active.start_turn(speaker)
+                action(self._ensure_session())
             except Exception as exc:
                 self._errorOccurred.emit(ErrorEvent(message=str(exc)))
 
@@ -353,11 +388,15 @@ class ConversationPage(QWidget):
             self._set_status(event.detail or "正在连接 …", TEXT_SECONDARY)
             return
 
-        self._pending_speaker = None
         self._set_controls_enabled(True)
         self._refresh_turn_buttons()
 
-        if event.state in (ConversationState.FOREIGN_TURN, ConversationState.MY_TURN):
+        running = (
+            ConversationState.FOREIGN_TURN,
+            ConversationState.MY_TURN,
+            ConversationState.AUTO_LISTENING,
+        )
+        if event.state in running:
             self._set_status(event.detail, SUCCESS)
         elif event.state is ConversationState.FAILED:
             self._set_status(f"出错了：{event.detail}", WARNING)
@@ -365,15 +404,20 @@ class ConversationPage(QWidget):
             self._set_status(event.detail or "已停止。", TEXT_MUTED)
 
     def _on_error_ui(self, event: ErrorEvent) -> None:
-        self._pending_speaker = None
         self._set_controls_enabled(True)
         self._refresh_turn_buttons()
         self._set_status(event.message, WARNING)
 
     def _refresh_turn_buttons(self) -> None:
+        auto = self._auto_toggle.isChecked()
+        self._foreign_button.setVisible(not auto)
+        self._my_button.setVisible(not auto)
+        self._auto_button.setVisible(auto)
+
         language = language_name(self._current_language())
         session = self._session
         active = session.active_speaker if session is not None else None
+        running = session is not None and session.is_running
 
         self._apply_turn_button(
             self._foreign_button,
@@ -386,6 +430,12 @@ class ConversationPage(QWidget):
             active=active is Speaker.ME,
             idle_text="我说（中文）",
             active_text="我正在说（中文）　点击结束",
+        )
+        self._apply_turn_button(
+            self._auto_button,
+            active=auto and running,
+            idle_text=f"开始对话（中文 ⇄ {language}）",
+            active_text="正在对话　点击结束",
         )
 
     @staticmethod
@@ -400,6 +450,8 @@ class ConversationPage(QWidget):
     def _set_controls_enabled(self, enabled: bool) -> None:
         self._foreign_button.setEnabled(enabled)
         self._my_button.setEnabled(enabled)
+        self._auto_button.setEnabled(enabled)
+        self._auto_toggle.setEnabled(enabled)
         self._language_combo.setEnabled(enabled)
         self._voice_combo.setEnabled(enabled)
         self._device_combo.setEnabled(enabled)

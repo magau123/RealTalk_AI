@@ -52,19 +52,35 @@ def test_audio_flows_when_not_muted() -> None:
     assert recognizer.frames == [b"\x01\x02"]
 
 
-def test_muting_stops_audio_upload() -> None:
-    """朗读译文时若不掐掉上行，识别器会把扬声器的声音当成用户说话。"""
+def test_muting_replaces_microphone_audio_with_silence() -> None:
+    """朗读译文时若不屏蔽上行，识别器会把扬声器的声音当成有人在说话。"""
     session, recognizer = _running_listen_session()
 
     session.mute()
     assert session.is_muted
-    session._send_audio(b"\x01\x02")
-    assert recognizer.frames == []
+    session._send_audio(b"\x01\x02\x03\x04")
+    assert recognizer.frames == [b"\x00\x00\x00\x00"]
 
     session.unmute()
     assert not session.is_muted
-    session._send_audio(b"\x03\x04")
-    assert recognizer.frames == [b"\x03\x04"]
+    session._send_audio(b"\x05\x06")
+    assert recognizer.frames[-1] == b"\x05\x06"
+
+
+def test_muting_keeps_sending_frames_to_avoid_idle_timeout() -> None:
+    """静音期间必须继续发帧。
+
+    服务端 23 秒收不到数据就断开连接（SDK 里同样硬编码了这个值）。
+    念一段长句子期间若真的停发，连接会被饿死，用户下一句话直接丢失。
+    """
+    session, recognizer = _running_listen_session()
+    session.mute()
+
+    for _ in range(5):
+        session._send_audio(b"\x11" * 3200)
+
+    assert len(recognizer.frames) == 5
+    assert all(frame == bytes(3200) for frame in recognizer.frames)
 
 
 def test_audio_is_dropped_when_not_running() -> None:
@@ -251,9 +267,10 @@ def test_intermediate_results_are_not_read_aloud(
     assert session._speech_queue.empty()
 
 
-def test_final_without_translation_is_not_queued(
+def test_final_without_translation_is_still_queued(
     session: ConversationSession,
 ) -> None:
+    """自动模式下我的中文入队时还没有译文，朗读线程会在合成前补翻译。"""
     _emit(
         session,
         Speaker.ME,
@@ -263,7 +280,93 @@ def test_final_without_translation_is_not_queued(
         translated="",
         is_final=True,
     )
+    assert session._speech_queue.qsize() == 1
+
+
+def test_empty_sentence_is_not_queued(session: ConversationSession) -> None:
+    """既没有原文也没有译文时无话可说，入队只会浪费一次翻译请求。"""
+    _emit(
+        session,
+        Speaker.ME,
+        turn=1,
+        sentence_id=0,
+        source="",
+        translated="",
+        is_final=True,
+    )
     assert session._speech_queue.empty()
+
+
+# ---- 自动模式 ----
+
+
+def _auto_emit(
+    session: ConversationSession, text: str, *, sentence_id: int = 0, translated: str = ""
+) -> ConversationMessage | None:
+    captured: list[ConversationMessage] = []
+    session._on_message = captured.append
+    session._handle_auto_sentence(
+        SentenceUpdate(
+            sentence_id=sentence_id,
+            source_text=text,
+            translated_text=translated,
+            is_final=True,
+        ),
+        1,
+    )
+    return captured[-1] if captured else None
+
+
+def test_auto_routes_chinese_to_me(session: ConversationSession) -> None:
+    message = _auto_emit(session, "请问洗手间在哪里")
+    assert message is not None
+    assert message.speaker is Speaker.ME
+
+
+def test_auto_routes_foreign_to_them(session: ConversationSession) -> None:
+    message = _auto_emit(session, "Where is the restroom", translated="洗手间在哪里")
+    assert message is not None
+    assert message.speaker is Speaker.FOREIGN
+    assert message.translated_text == "洗手间在哪里"
+
+
+def test_auto_discards_gummy_translation_for_my_speech(
+    session: ConversationSession,
+) -> None:
+    """自动模式的翻译目标固定为中文，我说中文时 Gummy 在做中译中。
+
+    那个结果若被当成译文，会让外语音色去念中文，对方完全听不懂。
+    """
+    message = _auto_emit(session, "你好", translated="你好")
+    assert message is not None
+    assert message.translated_text == ""
+
+
+def test_auto_defers_undecidable_sentences(session: ConversationSession) -> None:
+    """只识别出标点时看不出是谁在说，应当等后续结果而不是猜。"""
+    assert _auto_emit(session, "？？") is None
+    assert session._speech_queue.empty()
+
+
+def test_auto_locks_speaker_for_the_whole_sentence(
+    session: ConversationSession,
+) -> None:
+    """判定一旦做出就锁定，否则中间结果会让气泡在左右之间来回跳。"""
+    first = _auto_emit(session, "Hello", sentence_id=7)
+    assert first is not None and first.speaker is Speaker.FOREIGN
+
+    # 后续片段即便看着像中文，也必须沿用同一句已锁定的判定
+    later = _auto_emit(session, "Hello 你好", sentence_id=7)
+    assert later is not None and later.speaker is Speaker.FOREIGN
+
+
+def test_speaker_lock_is_reset_between_runs(session: ConversationSession) -> None:
+    """sentence_id 每条新连接都从 0 开始，上一场的判定不能延续到下一场。"""
+    _auto_emit(session, "Hello", sentence_id=0)
+    assert session._sentence_speakers[0] is Speaker.FOREIGN
+
+    session._begin_turn()
+    assert session._sentence_speakers == {}
 
 
 def test_replay_only_accepts_my_translated_messages(

@@ -28,11 +28,14 @@ from realtalk.audio.player import PcmStreamPlayer
 from realtalk.config import Settings
 from realtalk.core.events import ErrorEvent, SentenceUpdate, SessionState, StateEvent
 from realtalk.core.listen import ListenSession
+from realtalk.core.translator import TextTranslator
 from realtalk.core.tts import SpeechSynthesizerClient, SynthesisError
 from realtalk.languages import (
+    AUTO,
     conversation_languages,
     default_voice,
     language_name,
+    looks_like_chinese,
     voice_by_id,
 )
 
@@ -46,11 +49,17 @@ class Speaker(enum.Enum):
     ME = "me"            # 我，说中文，译文合成为外语语音播放
 
 
+class TurnMode(enum.Enum):
+    MANUAL = "manual"  # 两个按钮显式切换发言人
+    AUTO = "auto"      # 单条连接，按识别文本的书写系统判断是谁在说
+
+
 class ConversationState(enum.Enum):
     IDLE = "idle"
     CONNECTING = "connecting"
     FOREIGN_TURN = "foreign_turn"
     MY_TURN = "my_turn"
+    AUTO_LISTENING = "auto_listening"
     FAILED = "failed"
 
 
@@ -121,11 +130,18 @@ class ConversationSession:
         self._synthesizer = SpeechSynthesizerClient(settings)
         self._player = PcmStreamPlayer(device=output_device)
 
+        self._translator = TextTranslator(settings)
+
         self._active: ListenSession | None = None
         self._active_speaker: Speaker | None = None
+        self._mode: TurnMode | None = None
         self._turn_index = 0
         self._state = ConversationState.IDLE
         self._lock = threading.RLock()
+
+        # 自动模式下锁定每句话的发言人。中间结果可能短到无法判断书写系统
+        # （例如只识别出「?」），逐次重判会让气泡在左右两侧来回跳。
+        self._sentence_speakers: dict[int, Speaker] = {}
 
         self._speech_queue: queue.Queue[ConversationMessage | None] = queue.Queue()
         self._speech_worker = threading.Thread(
@@ -162,7 +178,16 @@ class ConversationSession:
     def active_speaker(self) -> Speaker | None:
         return self._active_speaker
 
-    # ---- 轮次控制 ----
+    @property
+    def mode(self) -> TurnMode | None:
+        """当前正在运行的模式，未运行时为 None。"""
+        return self._mode
+
+    @property
+    def is_running(self) -> bool:
+        return self._active is not None
+
+    # ---- 手动模式 ----
 
     def start_turn(self, speaker: Speaker) -> None:
         """开始某一方的发言。会阻塞到连接建立，UI 请在后台线程调用。
@@ -170,12 +195,9 @@ class ConversationSession:
         若另一方正在发言，先结束对方的轮次。
         """
         with self._lock:
-            if self._active_speaker is speaker:
+            if self._mode is TurnMode.MANUAL and self._active_speaker is speaker:
                 return
             self._stop_active()
-
-            self._turn_index += 1
-            turn = self._turn_index
 
             if speaker is Speaker.FOREIGN:
                 source, target = self._foreign_language, CHINESE
@@ -187,27 +209,20 @@ class ConversationSession:
                 f"正在准备{self._speaker_label(speaker)}的通道 …",
             )
 
-            session = ListenSession(
-                self._settings,
+            turn = self._begin_turn()
+            session = self._open_session(
+                source_language=source,
+                target_language=target,
                 on_sentence=lambda update: self._handle_sentence(
                     update, speaker=speaker, turn=turn
                 ),
-                on_state=lambda event: self._handle_inner_state(event, speaker),
-                on_error=self._forward_error,
-                source_language=source,
-                target_language=target,
-                device=self._input_device,
             )
-
-            try:
-                session.start()
-            except Exception as exc:
-                self._set_state(ConversationState.FAILED, str(exc))
-                self._emit_error(f"无法开始{self._speaker_label(speaker)}：{exc}")
+            if session is None:
                 return
 
             self._active = session
             self._active_speaker = speaker
+            self._mode = TurnMode.MANUAL
             self._set_state(
                 ConversationState.FOREIGN_TURN
                 if speaker is Speaker.FOREIGN
@@ -215,13 +230,82 @@ class ConversationSession:
                 self._turn_hint(speaker),
             )
 
-    def end_turn(self) -> None:
-        """结束当前发言。队列中尚未朗读的译文仍会播放完。"""
+    # ---- 自动模式 ----
+
+    def start_auto(self) -> None:
+        """开启自动模式：一条连接，按识别文本判断说话人。
+
+        源语种设为 auto、翻译目标固定为中文。对方说外语时 Gummy 直接给出
+        流式中文译文，延迟与手动模式完全相同；只有我说中文时才需要额外一次
+        中译外，而那一侧本来就要等语音合成，多出的这一跳被掩盖掉了。
+
+        反过来把目标固定为外语是行不通的：那样对方的话会被翻成他自己的语言，
+        等于没翻。所以只能固定中文，让「我说的话」走补翻译。
+        """
         with self._lock:
-            if self._active_speaker is None:
+            if self._mode is TurnMode.AUTO:
                 return
             self._stop_active()
-            self._set_state(ConversationState.IDLE, "已停止。点击按钮开始下一轮。")
+
+            self._set_state(ConversationState.CONNECTING, "正在准备对话通道 …")
+
+            turn = self._begin_turn()
+            session = self._open_session(
+                source_language=AUTO,
+                target_language=CHINESE,
+                on_sentence=lambda update: self._handle_auto_sentence(update, turn),
+            )
+            if session is None:
+                return
+
+            self._active = session
+            self._active_speaker = None
+            self._mode = TurnMode.AUTO
+            self._set_state(
+                ConversationState.AUTO_LISTENING,
+                f"正在自动识别。双方直接说话即可，"
+                f"中文会翻成{language_name(self._foreign_language)}读给对方听。",
+            )
+
+    def stop(self) -> None:
+        """结束当前会话。队列中尚未朗读的译文仍会播放完。"""
+        with self._lock:
+            if self._active is None:
+                return
+            self._stop_active()
+            self._set_state(ConversationState.IDLE, "已停止。点击按钮重新开始。")
+
+    # 手动模式下的语义化别名
+    end_turn = stop
+
+    def _begin_turn(self) -> int:
+        self._turn_index += 1
+        self._sentence_speakers.clear()
+        return self._turn_index
+
+    def _open_session(
+        self,
+        *,
+        source_language: str,
+        target_language: str,
+        on_sentence: Callable[[SentenceUpdate], None],
+    ) -> ListenSession | None:
+        session = ListenSession(
+            self._settings,
+            on_sentence=on_sentence,
+            on_state=self._handle_inner_state,
+            on_error=self._forward_error,
+            source_language=source_language,
+            target_language=target_language,
+            device=self._input_device,
+        )
+        try:
+            session.start()
+        except Exception as exc:
+            self._set_state(ConversationState.FAILED, str(exc))
+            self._emit_error(f"无法开始对话：{exc}")
+            return None
+        return session
 
     def shutdown(self, *, drain_timeout: float = 8.0) -> None:
         """结束会话。
@@ -245,10 +329,43 @@ class ConversationSession:
         session = self._active
         self._active = None
         self._active_speaker = None
+        self._mode = None
         if session is not None:
             session.stop()
 
     # ---- 识别结果处理 ----
+
+    def _handle_auto_sentence(self, update: SentenceUpdate, turn: int) -> None:
+        speaker = self._resolve_speaker(update)
+        if speaker is None:
+            # 还看不出是谁在说（例如只识别出标点），等下一批结果
+            return
+
+        if speaker is Speaker.ME:
+            # Gummy 此时在做中译中，结果要么是原文要么为空，两种都不能当译文
+            # 用——直接拿去合成会让对方听到外语音色念中文。清空后交给补翻译。
+            update = replace(update, translated_text="")
+
+        self._handle_sentence(update, speaker=speaker, turn=turn)
+
+    def _resolve_speaker(self, update: SentenceUpdate) -> Speaker | None:
+        """判断这句是谁说的，判定结果按句锁定。
+
+        锁定是必要的：中间结果不断增长，早期片段可能短到无法判断书写系统，
+        若每批都重判，气泡会在左右两侧来回跳。
+        """
+        with self._lock:
+            cached = self._sentence_speakers.get(update.sentence_id)
+            if cached is not None:
+                return cached
+
+            is_chinese = looks_like_chinese(update.source_text)
+            if is_chinese is None:
+                return None
+
+            speaker = Speaker.ME if is_chinese else Speaker.FOREIGN
+            self._sentence_speakers[update.sentence_id] = speaker
+            return speaker
 
     def _handle_sentence(
         self, update: SentenceUpdate, *, speaker: Speaker, turn: int
@@ -270,10 +387,13 @@ class ConversationSession:
 
         # 只有我说的话需要读给对方听，且必须等这句定稿——中间结果每秒刷新
         # 多次，逐条合成会让对方听到不断被打断的半句话。
-        if speaker is Speaker.ME and update.is_final and update.translated_text:
+        #
+        # 这里不要求译文已经就绪：自动模式下我的中文是交给补翻译的，入队时
+        # 只有原文。译文缺失时由朗读线程在合成前补上。
+        if speaker is Speaker.ME and update.is_final and message.original_text:
             self._speech_queue.put(message)
 
-    def _handle_inner_state(self, event: StateEvent, speaker: Speaker) -> None:
+    def _handle_inner_state(self, event: StateEvent) -> None:
         if event.state is SessionState.FAILED:
             self._set_state(ConversationState.FAILED, event.detail)
 
@@ -294,9 +414,13 @@ class ConversationSession:
                 self._emit_error("朗读失败，请查看日志。下一句仍会正常朗读。")
 
     def _speak(self, message: ConversationMessage) -> None:
+        message = self._ensure_translation(message)
+        if message is None or not message.translated_text:
+            return
+
         session = self._active
         # 播放期间掐掉音频上行，否则扬声器里的外语会被麦克风重新收进来，
-        # 被固定为中文的识别器强行拟合成乱码。
+        # 识别器会把「自己刚说出去的话」当成对方在讲，再翻译一遍显示出来。
         if session is not None:
             session.mute()
 
@@ -314,6 +438,33 @@ class ConversationSession:
                 session.unmute()
 
         self._emit_message(replace(message, is_speaking=False, has_spoken=True))
+
+    def _ensure_translation(
+        self, message: ConversationMessage
+    ) -> ConversationMessage | None:
+        """译文缺失时补一次中译外。
+
+        自动模式下 Gummy 的翻译目标固定为中文，我说的中文拿不到外语译文，
+        必须在这里补。手动模式通常用不到，但 Gummy 偶尔漏译时它同样兜底。
+        """
+        if message.translated_text:
+            return message
+        if not message.original_text:
+            return None
+
+        text = self._translator.translate_quietly(
+            message.original_text,
+            target_language=self._foreign_language,
+            source_language=CHINESE,
+        )
+        if not text:
+            self._emit_error("翻译失败，这句话没能读给对方听。")
+            self._emit_message(replace(message, is_speaking=False))
+            return None
+
+        translated = replace(message, translated_text=text)
+        self._emit_message(translated)
+        return translated
 
     def replay(self, message: ConversationMessage) -> None:
         """重放某条译文，用于对方没听清时。"""

@@ -20,6 +20,7 @@ from realtalk.languages import (
     conversation_languages,
     default_voice,
     language_name,
+    looks_like_chinese,
     qwen_mt_name,
     tts_supported_languages,
     voice_by_id,
@@ -110,6 +111,50 @@ def test_default_voice_rejects_unsupported_language() -> None:
 def test_voice_lookup() -> None:
     assert voice_by_id("loongyuuna_v2").language_code == "ja"
     assert voice_by_id("does-not-exist") is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "你好，请问洗手间在哪里？",
+        "我想订一张去北京的票",
+        "好的",
+        "我要去 Starbucks 买咖啡",  # 中英混说，主体是中文
+    ],
+)
+def test_chinese_is_detected(text: str) -> None:
+    assert looks_like_chinese(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Where is the restroom?",
+        "Could you tell me how to get to the station",
+        "すみません、駅はどこですか",   # 含假名，日文
+        "コーヒーをください",           # 片假名
+        "화장실이 어디예요",             # 谚文
+        "Où est la gare",               # 带变音符的拉丁字母
+    ],
+)
+def test_foreign_is_detected(text: str) -> None:
+    assert looks_like_chinese(text) is False
+
+
+def test_kana_is_checked_before_han() -> None:
+    """日文和中文共用汉字区块，必须先查假名。
+
+    先查汉字的话，「これは本です」会因为含「本」被误判成中文，
+    于是系统会把对方说的日语当成我的话，翻成日语再念给对方听。
+    """
+    assert looks_like_chinese("これは本です") is False
+    assert looks_like_chinese("東京駅に行きます") is False
+
+
+@pytest.mark.parametrize("text", ["", "   ", "？？", "123", "..."])
+def test_undecidable_text_returns_none(text: str) -> None:
+    """无法判断时必须返回 None，让调用方沿用上一次判定而不是瞎猜。"""
+    assert looks_like_chinese(text) is None
 
 
 def test_conversation_languages_satisfy_all_three_conditions() -> None:
