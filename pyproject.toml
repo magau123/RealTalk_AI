@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "realtalk-ai"
-version = "0.1.0"
-description = "基于阿里云百炼的实时多语言语音翻译工具"
+version = "0.2.0"
+description = "基于阿里云百炼的实时对话翻译工具：对方说外语你看中文，你说中文对方听外语"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

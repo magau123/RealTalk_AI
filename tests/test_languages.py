@@ -17,6 +17,7 @@ from realtalk.languages import (
     SOURCES_TRANSLATABLE_TO_ZH,
     TTS_VOICES,
     can_gummy_translate,
+    conversation_languages,
     default_voice,
     language_name,
     qwen_mt_name,
@@ -109,3 +110,34 @@ def test_default_voice_rejects_unsupported_language() -> None:
 def test_voice_lookup() -> None:
     assert voice_by_id("loongyuuna_v2").language_code == "ja"
     assert voice_by_id("does-not-exist") is None
+
+
+def test_conversation_languages_satisfy_all_three_conditions() -> None:
+    """对话模式的语种必须双向可直译且有音色，任缺一条都不能出现在列表里。"""
+    for code in conversation_languages():
+        assert can_gummy_translate(code, "zh"), f"{code} 无法翻译成中文"
+        assert can_gummy_translate("zh", code), f"中文无法翻译成 {code}"
+        assert code in TTS_VOICES, f"{code} 没有可用音色"
+
+
+def test_chinese_is_not_a_conversation_language() -> None:
+    """中文是「我」这一侧固定的语言，不能作为对方的语言。"""
+    assert "zh" not in conversation_languages()
+
+
+def test_english_and_japanese_are_conversation_ready() -> None:
+    languages = conversation_languages()
+    assert "en" in languages
+    assert "ja" in languages
+
+
+def test_spanish_is_excluded_for_lack_of_voice() -> None:
+    """西班牙语双向翻译都支持，但 cosyvoice-v2 没有西语系统音色。
+
+    这条断言是为了把「翻译能力」和「朗读能力」两件事的区别固定下来：
+    只看翻译矩阵会误以为西语可用，实际上译文没法读出来。
+    """
+    assert can_gummy_translate("es", "zh")
+    assert can_gummy_translate("zh", "es")
+    assert "es" not in TTS_VOICES
+    assert "es" not in conversation_languages()

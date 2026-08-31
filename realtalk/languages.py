@@ -179,8 +179,31 @@ def can_gummy_translate(source: str, target: str) -> bool:
 
 
 def tts_supported_languages() -> tuple[str, ...]:
-    """方向二可选的目标语言，即既能翻译又有可用 TTS 音色的语种。"""
+    """有可用 TTS 音色的语种。"""
     return tuple(TTS_VOICES.keys())
+
+
+def conversation_languages() -> tuple[str, ...]:
+    """可用于对话模式的外语。
+
+    对话是双向的，一个语种要能用必须同时满足三个条件：
+      1. Gummy 支持「该语种 → 中文」直译（听懂对方）
+      2. Gummy 支持「中文 → 该语种」直译（把我的话翻给对方）
+      3. 有可用的 TTS 音色（把译文读出来给对方听）
+
+    这里用交集算出来而不是硬编码，是为了将来往 TTS_VOICES 或翻译矩阵里
+    加语种时，不会漏掉其中某一个条件而在运行时才暴露问题。
+
+    西班牙语是个典型例子：它满足前两条，但 cosyvoice-v2 没有西语系统音色，
+    因此不会出现在结果里。
+    """
+    return tuple(
+        code
+        for code in TTS_VOICES
+        if code != "zh"
+        and can_gummy_translate(code, "zh")
+        and can_gummy_translate("zh", code)
+    )
 
 
 def default_voice(language_code: str) -> Voice:

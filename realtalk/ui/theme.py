@@ -188,16 +188,69 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
     background: none;
 }}
 
-QFrame#SentenceCard {{
+QFrame#ForeignBubble {{
     background-color: {SURFACE_RAISED};
     border: 1px solid {BORDER};
-    border-radius: 8px;
+    border-radius: 12px;
 }}
 
-QFrame#SentenceCardLive {{
+QFrame#ForeignBubbleLive {{
     background-color: {SURFACE_RAISED};
     border: 1px solid {ACCENT};
-    border-radius: 8px;
+    border-radius: 12px;
+}}
+
+QFrame#MyBubble {{
+    background-color: #1e2c47;
+    border: 1px solid #2f4468;
+    border-radius: 12px;
+}}
+
+QFrame#MyBubbleLive {{
+    background-color: #1e2c47;
+    border: 1px solid {ACCENT};
+    border-radius: 12px;
+}}
+
+QFrame#MyBubbleSpeaking {{
+    background-color: #1e2c47;
+    border: 1px solid {SUCCESS};
+    border-radius: 12px;
+}}
+
+QPushButton#TurnButton {{
+    background-color: {SURFACE_RAISED};
+    border: 1px solid {BORDER};
+    border-radius: 10px;
+    padding: 16px 20px;
+    font-size: 16px;
+    font-weight: 600;
+}}
+
+QPushButton#TurnButton:hover {{
+    border-color: {ACCENT};
+}}
+
+QPushButton#TurnButtonActive {{
+    background-color: {ACCENT};
+    border: 1px solid {ACCENT};
+    border-radius: 10px;
+    padding: 16px 20px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+}}
+
+QPushButton#ReplayButton {{
+    background: transparent;
+    border: none;
+    color: {TEXT_MUTED};
+    font-size: 12px;
+    padding: 2px 6px;
+}}
+
+QPushButton#ReplayButton:hover {{
+    color: {ACCENT};
 }}
 
 QLabel#SourceText {{

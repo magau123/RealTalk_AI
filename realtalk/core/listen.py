@@ -97,6 +97,7 @@ class ListenSession:
         self._sentences: dict[int, SentenceUpdate] = {}
         self._lock = threading.Lock()
         self._state = SessionState.IDLE
+        self._muted = threading.Event()
 
         self._translator = TextTranslator(settings) if self._needs_fallback else None
         self._fallback_queue: queue.Queue[SentenceUpdate | None] = queue.Queue()
@@ -197,9 +198,27 @@ class ListenSession:
         finally:
             self._recognizer = None
 
+    def mute(self) -> None:
+        """暂停向服务端发送音频，但保持连接不断。
+
+        对话场景下必需：扬声器正在播放译文语音时，麦克风会把这段声音重新
+        收进来。识别器的源语种是固定的，这些「自己说出去的话」会被强行按
+        该语种拟合，产生乱码句子。丢弃这段音频比事后过滤可靠得多。
+        """
+        self._muted.set()
+
+    def unmute(self) -> None:
+        self._muted.clear()
+
+    @property
+    def is_muted(self) -> bool:
+        return self._muted.is_set()
+
     def _send_audio(self, frame: bytes) -> None:
         recognizer = self._recognizer
         if recognizer is None or self._state is not SessionState.RUNNING:
+            return
+        if self._muted.is_set():
             return
         recognizer.send_audio_frame(frame)
 

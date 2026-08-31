@@ -48,35 +48,41 @@ class PcmStreamPlayer:
         self._stream: sd.RawOutputStream | None = None
         self._worker: threading.Thread | None = None
         self._active = threading.Event()
-        self._finished = threading.Event()
         self._bytes_played = 0
+
+        # 生命周期锁。start / feed / finish / stop 会被三个不同的线程调用：
+        # 合成回调线程（start、feed）、发起合成的业务线程（finish）、以及
+        # 任意时刻想打断播放的线程（stop，例如关窗口）。没有这把锁的话，
+        # finish 正在 join 时 stop 去 close 同一个流，PortAudio 会因为
+        # 访问已释放的流而让整个进程崩溃（Windows 上表现为访问违例）。
+        self._lock = threading.RLock()
 
     @property
     def is_active(self) -> bool:
         return self._active.is_set()
 
     def start(self) -> None:
-        if self._active.is_set():
-            return
+        with self._lock:
+            if self._active.is_set():
+                return
 
-        self._bytes_played = 0
-        self._finished.clear()
-        while not self._queue.empty():
-            self._queue.get_nowait()
+            self._bytes_played = 0
+            self._drain_queue()
 
-        self._stream = sd.RawOutputStream(
-            samplerate=self._sample_rate,
-            channels=self._channels,
-            device=self._device,
-            dtype="int16",
-        )
-        self._stream.start()
-        self._active.set()
+            stream = sd.RawOutputStream(
+                samplerate=self._sample_rate,
+                channels=self._channels,
+                device=self._device,
+                dtype="int16",
+            )
+            stream.start()
+            self._stream = stream
+            self._active.set()
 
-        self._worker = threading.Thread(
-            target=self._play_loop, name="realtalk-player", daemon=True
-        )
-        self._worker.start()
+            self._worker = threading.Thread(
+                target=self._play_loop, name="realtalk-player", daemon=True
+            )
+            self._worker.start()
         logger.debug("播放器已启动：%dHz %d声道", self._sample_rate, self._channels)
 
     def feed(self, data: bytes) -> None:
@@ -89,57 +95,74 @@ class PcmStreamPlayer:
 
     def finish(self, timeout: float = 30.0) -> None:
         """告知数据已全部送入，阻塞等待队列中剩余音频播完后关闭。"""
-        if not self._active.is_set():
-            return
-        self._queue.put(_QUEUE_SENTINEL)
-        if self._worker is not None:
-            self._worker.join(timeout=timeout)
-        self._teardown()
+        with self._lock:
+            if not self._active.is_set():
+                return
+            worker = self._worker
+            self._queue.put(_QUEUE_SENTINEL)
+
+        # join 必须在锁外，否则 stop() 会被挡在锁上直到播放自然结束，
+        # 「立即打断」就失去意义了。
+        if worker is not None:
+            worker.join(timeout=timeout)
+        self._teardown(worker)
 
     def stop(self) -> None:
-        """立即中止播放并丢弃尚未播放的数据，用于「打断」。"""
-        if not self._active.is_set():
-            return
-        self._active.clear()
-        while not self._queue.empty():
+        """立即中止播放并丢弃尚未播放的数据，用于打断或关闭。"""
+        with self._lock:
+            if not self._active.is_set():
+                return
+            self._active.clear()
+            self._drain_queue()
+            self._queue.put(_QUEUE_SENTINEL)
+            worker = self._worker
+            if self._stream is not None:
+                try:
+                    # abort 会让阻塞中的 write 立刻返回，从而唤醒播放线程
+                    self._stream.abort()
+                except Exception:
+                    logger.debug("中止播放流时出错", exc_info=True)
+
+        if worker is not None:
+            worker.join(timeout=2.0)
+        self._teardown(worker)
+        logger.debug("播放已中止")
+
+    def _drain_queue(self) -> None:
+        while True:
             try:
                 self._queue.get_nowait()
             except queue.Empty:
-                break
-        self._queue.put(_QUEUE_SENTINEL)
+                return
 
-        if self._stream is not None:
-            try:
-                self._stream.abort()
-            except Exception:
-                logger.debug("中止播放流时出错", exc_info=True)
-
-        if self._worker is not None:
-            self._worker.join(timeout=2.0)
-        self._teardown()
-        logger.debug("播放已中止")
-
-    def _teardown(self) -> None:
-        self._active.clear()
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            except Exception:
-                logger.debug("关闭播放流时出错", exc_info=True)
-            self._stream = None
-        self._worker = None
-        self._finished.set()
+    def _teardown(self, worker: threading.Thread | None) -> None:
+        """关闭音频流。只有确认播放线程已退出才关，否则宁可泄漏也不能崩溃。"""
+        with self._lock:
+            self._active.clear()
+            if worker is not None and worker.is_alive():
+                # join 超时说明播放线程还在跑，此时 close 会造成
+                # write-after-close。留着流不关，进程退出时由系统回收。
+                logger.warning("播放线程未在超时内退出，跳过关闭音频流")
+                return
+            if self._stream is not None:
+                try:
+                    self._stream.stop()
+                    self._stream.close()
+                except Exception:
+                    logger.debug("关闭播放流时出错", exc_info=True)
+                self._stream = None
+            self._worker = None
 
     def _play_loop(self) -> None:
-        stream = self._stream
-        if stream is None:
-            return
         while True:
             chunk = self._queue.get()
             if chunk == _QUEUE_SENTINEL:
                 return
             if not self._active.is_set():
+                return
+            # 每次重新取流引用：stop() 可能已经把它置空了
+            stream = self._stream
+            if stream is None:
                 return
             try:
                 stream.write(chunk)
