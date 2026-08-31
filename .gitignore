@@ -52,6 +52,10 @@ logs/
 *.log
 output/
 recordings/
+
+# 开发期用来验证 API 链路的一次性脚本及其输出，不属于代码库
+probe_*.py
+probe_*.txt
 *.wav
 *.mp3
 *.pcm
