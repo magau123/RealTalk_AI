@@ -1,0 +1,68 @@
+# ---- 敏感信息：绝对不要提交 ----
+.env
+.env.*
+!.env.example
+config.yaml
+config.yml
+config.local.*
+*.pem
+*.key
+secrets/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib60/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- 测试与类型检查缓存 ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ---- 运行时产物 ----
+logs/
+*.log
+output/
+recordings/
+*.wav
+*.mp3
+*.pcm
+!assets/**/*.wav
+!assets/**/*.mp3
+
+# ---- 编辑器与操作系统 ----
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini

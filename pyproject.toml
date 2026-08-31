@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "realtalk-ai"
+version = "0.1.0"
+description = "基于阿里云百炼的实时多语言语音翻译工具"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["speech-translation", "asr", "tts", "dashscope", "aliyun", "realtime"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "dashscope>=1.26.4,<2.0.0",
+    "sounddevice>=0.5.0,<0.6.0",
+    "numpy>=1.26.0",
+    "PySide6>=6.8.0,<7.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+realtalk = "realtalk.cli:main"
+
+[project.gui-scripts]
+realtalk-gui = "realtalk.ui.app:run"
+
+[tool.setuptools.packages.find]
+include = ["realtalk*"]
+
+[tool.ruff]
+line-length = 90
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

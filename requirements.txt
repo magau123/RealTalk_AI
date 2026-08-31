@@ -1,0 +1,17 @@
+# RealTalk_AI 运行依赖
+# 安装：python -m pip install -r requirements.txt
+
+# 阿里云百炼 SDK。1.26.4 起才有 SpeechSynthesizer.streaming_cancel，
+# 打断正在播放的合成需要它，因此下限设在 1.26.4。
+dashscope>=1.26.4,<2.0.0
+
+# 麦克风采集与音频播放。相比 pyaudio，sounddevice 在 Windows / Python 3.13
+# 上有预编译 wheel，不需要本机 C 编译环境。
+sounddevice>=0.5.0,<0.6.0
+numpy>=1.26.0
+
+# 桌面界面
+PySide6>=6.8.0,<7.0.0
+
+# 从 .env 读取配置
+python-dotenv>=1.0.0,<2.0.0

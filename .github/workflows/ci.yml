@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: 安装系统音频库
+        # sounddevice 依赖 PortAudio，Linux 上不随 wheel 提供
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 libegl1 libxkbcommon-x11-0
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest ruff
+
+      - name: 代码检查
+        run: ruff check realtalk tests
+
+      - name: 运行测试
+        # 测试全部不依赖真实 API Key，因此 CI 无需配置任何密钥
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
