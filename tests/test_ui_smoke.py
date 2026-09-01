@@ -260,8 +260,9 @@ def test_page_has_listen_toggle_reply_button_and_separate_inputs(
 
     page = ConversationPage(_FAKE_SETTINGS)
     try:
-        assert page._listen_button.text() == "开始检测英语"
+        assert page._listen_button.text() == "开始检测"
         assert page._speak_button.text() == "我要说中文"
+        assert not hasattr(page, "_ja_listen_button")
         assert page._foreign_device_combo is not page._mic_combo
         assert "麦克风" in page._mic_combo.currentText()
     finally:
@@ -271,7 +272,7 @@ def test_page_has_listen_toggle_reply_button_and_separate_inputs(
 def test_listen_button_explicitly_starts_and_stops_detection(
     qapp: QApplication,
 ) -> None:
-    """启动时不偷开录音；开始和关闭都只由英语检测按钮决定。"""
+    """启动时不偷开录音；开始和关闭都只由检测按钮决定。"""
     from realtalk.ui.conversation_page import ConversationPage
 
     page = ConversationPage(_FAKE_SETTINGS)
@@ -287,12 +288,12 @@ def test_listen_button_explicitly_starts_and_stops_detection(
         page._on_listen_clicked()
         assert calls == ["start"]
         assert page._listening_requested
-        assert page._listen_button.text() == "关闭英语检测"
+        assert page._listen_button.text() == "关闭检测"
 
         page._on_listen_clicked()
         assert calls == ["start", "stop"]
         assert not page._listening_requested
-        assert page._listen_button.text() == "开始检测英语"
+        assert page._listen_button.text() == "开始检测"
     finally:
         page.close()
         page.deleteLater()

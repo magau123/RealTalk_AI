@@ -38,6 +38,7 @@ from realtalk.core.conversation import (
 )
 from realtalk.core.events import ErrorEvent
 from realtalk.languages import (
+    AUTO,
     TTS_VOICES,
     conversation_languages,
     language_name,
@@ -227,7 +228,7 @@ class ConversationPage(QWidget):
         self._scroll = self._build_transcript()
         root.addWidget(self._scroll, stretch=1)
 
-        self._status = QLabel("已就绪。点击「开始检测英语」后接收并实时翻译。")
+        self._status = QLabel("已就绪。点击「开始检测」后接收并实时翻译为中文。")
         self._status.setObjectName("StatusLabel")
         self._status.setWordWrap(True)
         root.addWidget(self._status)
@@ -301,7 +302,7 @@ class ConversationPage(QWidget):
 
         devices = list_input_devices()
 
-        grid.addWidget(self._caption("英语声音来源"), 0, 2)
+        grid.addWidget(self._caption("对方声音来源"), 0, 2)
         self._foreign_device_combo = QComboBox()
         self._foreign_device_combo.setToolTip(
             "选择电脑回环声音，或在没有回环设备时使用默认麦克风。"
@@ -384,7 +385,7 @@ class ConversationPage(QWidget):
 
         self._placeholder = QLabel(
             "对话内容会显示在这里。\n\n"
-            "点击「开始检测英语」，接收声音并实时翻译为中文。\n"
+            "点击「开始检测」，英语或日语都会实时翻译为中文。\n"
             "需要回复时，点击「我要说中文」。"
         )
         self._placeholder.setObjectName("HintLabel")
@@ -393,7 +394,7 @@ class ConversationPage(QWidget):
         return self._scroll
 
     def _create_action_buttons(self) -> None:
-        self._listen_button = QPushButton("开始检测英语")
+        self._listen_button = QPushButton("开始检测")
         self._listen_button.setObjectName("ListenButton")
         self._listen_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._listen_button.clicked.connect(self._on_listen_clicked)
@@ -455,11 +456,11 @@ class ConversationPage(QWidget):
     def _stop_current_session(self) -> None:
         session = self._session
         if session is None or not session.is_running:
-            self._set_status("英语检测已关闭。", TEXT_MUTED)
+            self._set_status("检测已关闭。", TEXT_MUTED)
             self._set_controls_enabled(True)
             return
         self._set_controls_enabled(False)
-        self._set_status("正在关闭英语检测 …", TEXT_SECONDARY)
+        self._set_status("正在关闭检测 …", TEXT_SECONDARY)
 
         def run() -> None:
             try:
@@ -518,6 +519,7 @@ class ConversationPage(QWidget):
         return ConversationSession(
             self._settings,
             foreign_language=self._current_language(),
+            listen_language=AUTO,
             on_message=self._messageReceived.emit,
             on_state=self._stateChanged.emit,
             on_error=self._errorOccurred.emit,
@@ -642,8 +644,8 @@ class ConversationPage(QWidget):
         self._apply_turn_button(
             self._listen_button,
             active=self._listening_requested,
-            idle_text="开始检测英语",
-            active_text="关闭英语检测",
+            idle_text="开始检测",
+            active_text="关闭检测",
             idle_name="ListenButton",
             active_name="ListenButtonActive",
         )
@@ -652,7 +654,7 @@ class ConversationPage(QWidget):
             active=active is Speaker.ME,
             idle_text="我要说中文",
             active_text=(
-                f"说完了，继续听{language_name(self._current_language())}"
+                "说完了，继续听"
                 if self._listening_requested
                 else "说完了，停止录音"
             ),

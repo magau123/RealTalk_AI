@@ -105,6 +105,7 @@ class ConversationSession:
         settings: Settings,
         *,
         foreign_language: str = "en",
+        listen_language: str | None = None,
         on_message: MessageHandler,
         on_state: StateHandler | None = None,
         on_error: ErrorHandler | None = None,
@@ -121,9 +122,15 @@ class ConversationSession:
                 f"对话要求该语种同时支持「→中文」「中文→」双向直译且有可用音色，"
                 f"当前可用：{', '.join(language_name(c) for c in available)}"
             )
+        source = AUTO if listen_language is None else listen_language
+        if source != AUTO and source not in available:
+            raise ValueError(
+                f"{language_name(source)} 暂不支持听译成中文。"
+            )
 
         self._settings = settings
         self._foreign_language = foreign_language
+        self._listen_language = source
         self._on_message = on_message
         self._on_state = on_state
         self._on_error = on_error
@@ -175,6 +182,10 @@ class ConversationSession:
         return self._foreign_language
 
     @property
+    def listen_language(self) -> str:
+        return self._listen_language
+
+    @property
     def voice(self) -> str:
         return self._voice
 
@@ -208,7 +219,7 @@ class ConversationSession:
             self._stop_active()
 
             if speaker is Speaker.FOREIGN:
-                source, target = self._foreign_language, CHINESE
+                source, target = self._listen_language, CHINESE
             else:
                 source, target = CHINESE, self._foreign_language
 
@@ -392,7 +403,9 @@ class ConversationSession:
             translated_text=update.translated_text,
             is_final=update.is_final,
             original_language=(
-                self._foreign_language if speaker is Speaker.FOREIGN else CHINESE
+                (update.source_language or self._listen_language)
+                if speaker is Speaker.FOREIGN
+                else CHINESE
             ),
             translated_language=(
                 CHINESE if speaker is Speaker.FOREIGN else self._foreign_language
@@ -491,15 +504,12 @@ class ConversationSession:
 
     def _speaker_label(self, speaker: Speaker) -> str:
         if speaker is Speaker.FOREIGN:
-            return f"对方（{language_name(self._foreign_language)}）"
+            return "对方"
         return "我（中文）"
 
     def _turn_hint(self, speaker: Speaker) -> str:
         if speaker is Speaker.FOREIGN:
-            return (
-                f"正在听对方说{language_name(self._foreign_language)}，"
-                f"译文会显示为中文。"
-            )
+            return "正在听对方说话，译文会显示为中文。"
         return (
             f"请说中文，译文会用{language_name(self._foreign_language)}"
             f"朗读给对方听。"

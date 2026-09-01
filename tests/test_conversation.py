@@ -251,6 +251,19 @@ def session() -> ConversationSession:
     yield created
 
 
+def test_listen_defaults_to_auto_source_language() -> None:
+    created = ConversationSession(
+        _FAKE_SETTINGS,
+        foreign_language="en",
+        on_message=lambda _: None,
+    )
+    try:
+        assert created.listen_language == "auto"
+        assert created.foreign_language == "en"
+    finally:
+        created.shutdown(drain_timeout=1.0)
+
+
 def test_rejects_language_without_full_conversation_support() -> None:
     """西班牙语双向可译但没有音色，必须在构造时就拒绝而不是运行时才炸。"""
     with pytest.raises(ValueError) as exc_info:
@@ -316,6 +329,7 @@ def _emit(
     source: str,
     translated: str,
     is_final: bool,
+    source_language: str | None = None,
 ) -> ConversationMessage:
     captured: list[ConversationMessage] = []
     session._on_message = captured.append
@@ -325,6 +339,7 @@ def _emit(
             source_text=source,
             translated_text=translated,
             is_final=is_final,
+            source_language=source_language,
         ),
         speaker=speaker,
         turn=turn,
@@ -367,8 +382,20 @@ def test_language_direction_is_set_per_speaker(session: ConversationSession) -> 
         translated="嗨",
         is_final=True,
     )
-    assert foreign.original_language == "en"
+    assert foreign.original_language == "auto"
     assert foreign.translated_language == "zh"
+
+    english = _emit(
+        session,
+        Speaker.FOREIGN,
+        turn=1,
+        sentence_id=1,
+        source="Hi",
+        translated="嗨",
+        is_final=True,
+        source_language="en",
+    )
+    assert english.original_language == "en"
 
     mine = _emit(
         session,
