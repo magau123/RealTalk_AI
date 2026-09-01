@@ -131,11 +131,49 @@ def _probe_tts(settings: Settings) -> tuple[bool, str]:
 
 
 def _probe_asr(settings: Settings) -> tuple[bool, str]:
-    """连接 Gummy 并发送一小段静音，验证识别链路可达。
+    """连接实时听译模型，验证鉴权和模型权限。"""
+    if settings.asr_model.startswith("qwen3.5-livetranslate"):
+        from dashscope.audio.qwen_omni import (
+            MultiModality,
+            OmniRealtimeCallback,
+            OmniRealtimeConversation,
+        )
+        from dashscope.audio.qwen_omni.omni_realtime import TranslationParams
 
-    只建连不真正说话，因此几乎不产生费用，但足以暴露鉴权、额度、
-    地域权限这几类问题。
-    """
+        errors: list[str] = []
+
+        class _Probe(OmniRealtimeCallback):
+            def on_event(self, event: dict) -> None:
+                if event.get("type") == "error":
+                    error = event.get("error") or {}
+                    errors.append(error.get("message") or str(error))
+
+        conversation = OmniRealtimeConversation(
+            model=settings.asr_model,
+            callback=_Probe(),
+            url=settings.websocket_url,
+            api_key=settings.dashscope_api_key,
+        )
+        try:
+            conversation.connect()
+            conversation.update_session(
+                output_modalities=[MultiModality.TEXT],
+                voice="Tina",
+                input_audio_transcription_model="qwen3-asr-flash-realtime",
+                translation_params=TranslationParams(language="zh"),
+            )
+        except Exception as exc:
+            errors.append(str(exc))
+        finally:
+            conversation.close()
+        return (
+            (False, errors[0])
+            if errors
+            else (True, "Qwen3.5 LiveTranslate WebSocket 建连正常")
+        )
+
+    # Gummy 只建连并发送一小段静音；几乎不产生费用，但足以暴露鉴权、
+    # 额度和地域权限问题。
     import threading
 
     from dashscope.audio.asr import (
@@ -265,11 +303,11 @@ def cmd_check(_: argparse.Namespace) -> int:
 def cmd_listen(args: argparse.Namespace) -> int:
     settings = _load_or_exit()
 
-    from realtalk.core.listen import ListenSession
+    from realtalk.core.listen import create_listen_session
 
     if args.source != AUTO and args.source not in GUMMY_ASR_LANGUAGES:
         print(
-            f"源语种 {args.source!r} 不在 Gummy 支持的识别语种内。\n"
+            f"源语种 {args.source!r} 不在当前支持的识别语种内。\n"
             f"可选：auto, {', '.join(sorted(GUMMY_ASR_LANGUAGES))}",
             file=sys.stderr,
         )
@@ -283,6 +321,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
             # 中间结果用 \r 原地刷新，定稿后换行固定下来
             marker = {
                 TranslationSource.GUMMY: "G",
+                TranslationSource.QWEN_LIVE: "Q",
                 TranslationSource.QWEN_MT: "M",
                 TranslationSource.NONE: " ",
             }[update.translation_source]
@@ -303,7 +342,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
     def on_error(event) -> None:  # noqa: ANN001
         print(f"\n错误：{event.message}", file=sys.stderr)
 
-    session = ListenSession(
+    session = create_listen_session(
         settings,
         on_sentence=on_sentence,
         on_state=on_state,
@@ -320,7 +359,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
         return 1
 
     print("\n开始说话吧。按 Ctrl+C 结束。")
-    print("（行首 G 表示译文来自 Gummy 内置翻译，M 表示来自文本翻译模型补译）\n")
+    print("（行首 Q/G/M 表示译文来自 Qwen 实时/Gummy/Qwen-MT）\n")
     try:
         while True:
             threading.Event().wait(0.2)

@@ -87,4 +87,4 @@ def test_model_overrides(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("REALTALK_MT_MODEL", "qwen-mt-plus")
     settings = load_settings(env_file=tmp_path / "absent.env")
     assert settings.mt_model == "qwen-mt-plus"
-    assert settings.asr_model == "gummy-realtime-v1"
+    assert settings.asr_model == "qwen3.5-livetranslate-flash-realtime"

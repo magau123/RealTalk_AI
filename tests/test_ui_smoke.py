@@ -110,6 +110,38 @@ def test_voice_choices_follow_selected_language(qapp: QApplication) -> None:
         page.deleteLater()
 
 
+def test_changing_voice_discards_session_with_stale_voice(
+    qapp: QApplication,
+) -> None:
+    """会话在构造时保存音色；选择新音色后必须重建，不能继续播放默认女声。"""
+    from realtalk.ui.conversation_page import ConversationPage
+
+    class FakeSession:
+        stopped = False
+
+        def shutdown(self) -> None:
+            self.stopped = True
+
+    page = ConversationPage(_FAKE_SETTINGS)
+    try:
+        session = FakeSession()
+        page._session = session
+        page._run_async = lambda function: function()
+
+        page._voice_combo.setCurrentIndex(1)
+
+        assert page._session is None
+        assert session.stopped
+        assert page._voice_combo.currentData() == TTS_VOICES["en"][1].voice_id
+
+        rebuilt = page._ensure_session()
+        assert rebuilt.voice == "loongbrian_v2"
+        rebuilt.shutdown()
+        page._session = None
+    finally:
+        page.deleteLater()
+
+
 def test_bubbles_update_in_place(qapp: QApplication) -> None:
     """同一 message_id 的多次更新必须复用同一个气泡，而不是不断追加。"""
     from realtalk.ui.conversation_page import ConversationPage
@@ -174,14 +206,62 @@ def test_replay_button_only_appears_for_my_spoken_messages(qapp: QApplication) -
         page.deleteLater()
 
 
-def test_turn_buttons_reflect_language(qapp: QApplication) -> None:
+def test_long_messages_scroll_to_latest_instead_of_blank_space(
+    qapp: QApplication,
+) -> None:
+    """内容超过一屏后滚到底，看到的必须是最新一条，而不是空白。
+
+    气泡是整行铺满、靠折行撑高的，而 QScrollArea 按 sizeHint（不折行的
+    高度）算内容高度，两者差出好几倍。不修正的话容器比真实内容高一大截，
+    自动滚到底就滚进了空白区，最新的话反而留在上面，得往回滚才看得到。
+    """
+    from realtalk.ui.conversation_page import ConversationPage
+
+    english = "Good morning everyone, my name is David and I am a project manager. " * 4
+    chinese = "大家早上好，我叫大卫，是一名项目经理。" * 4
+
+    page = ConversationPage(_FAKE_SETTINGS)
+    try:
+        page.setFixedSize(900, 600)
+        page.show()
+        qapp.processEvents()
+
+        for index in range(6):
+            page._on_message_ui(
+                _message(
+                    f"t1-s{index}", Speaker.FOREIGN, english, chinese, is_final=True
+                )
+            )
+        for _ in range(5):
+            qapp.processEvents()
+
+        scrollbar = page._scroll.verticalScrollBar()
+        latest = page._bubbles["t1-s5"]
+
+        # 折行高度真的传上去了：单行大约 20px，折行后应该高得多
+        assert latest.height() > 120
+
+        assert scrollbar.maximum() > 0, "六条长消息早该超过一屏"
+        assert scrollbar.value() == scrollbar.maximum(), "新消息到达应自动滚到底"
+
+        content_bottom = latest.y() + latest.height()
+        visible_bottom = scrollbar.value() + page._scroll.viewport().height()
+        assert content_bottom <= visible_bottom, "最新一条被挡在可视区外"
+        assert visible_bottom - content_bottom < 40, "滚到底后下方是成片空白"
+    finally:
+        page.close()
+        page.deleteLater()
+
+
+def test_page_has_one_reply_button_and_separate_inputs(qapp: QApplication) -> None:
     from realtalk.ui.conversation_page import ConversationPage
 
     page = ConversationPage(_FAKE_SETTINGS)
     try:
-        page._language_combo.setCurrentIndex(0)
-        assert "对方说" in page._foreign_button.text()
-        assert "我说" in page._my_button.text()
-        assert "中文" in page._my_button.text()
+        assert page._speak_button.text() == "我要说中文"
+        assert not hasattr(page, "_foreign_button")
+        assert not hasattr(page, "_my_button")
+        assert page._foreign_device_combo is not page._mic_combo
+        assert "麦克风" in page._mic_combo.currentText()
     finally:
         page.deleteLater()

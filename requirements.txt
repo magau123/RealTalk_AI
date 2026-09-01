@@ -9,6 +9,8 @@ dashscope>=1.26.4,<2.0.0
 # 上有预编译 wheel，不需要本机 C 编译环境。
 sounddevice>=0.5.0,<0.6.0
 numpy>=1.26.0
+# Windows 系统扬声器回环录音；其他平台不会安装。
+PyAudioWPatch>=0.2.12.8; sys_platform == "win32"
 
 # 桌面界面
 PySide6>=6.8.0,<7.0.0

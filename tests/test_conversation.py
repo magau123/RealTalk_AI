@@ -10,8 +10,14 @@ from __future__ import annotations
 
 import queue
 
+import numpy as np
 import pytest
 
+from realtalk.audio.recorder import (
+    WASAPI_LOOPBACK_DEVICE,
+    MicrophoneRecorder,
+    _resample_pcm16,
+)
 from realtalk.config import Settings
 from realtalk.core.conversation import (
     ConversationMessage,
@@ -20,9 +26,150 @@ from realtalk.core.conversation import (
 )
 from realtalk.core.events import SentenceUpdate, SessionState
 from realtalk.core.listen import ListenSession
+from realtalk.core.qwen_listen import QwenLiveTranslateSession
 from realtalk.languages import conversation_languages
 
 _FAKE_SETTINGS = Settings(dashscope_api_key="sk-0123456789abcdef0123456789abcdef")
+
+
+def test_native_48khz_input_is_resampled_to_gummy_16khz() -> None:
+    source = np.arange(4800, dtype="<i2").tobytes()
+    converted = np.frombuffer(_resample_pcm16(source, 48000, 16000), dtype="<i2")
+
+    assert len(converted) == 1600
+    assert converted.tolist() == list(range(0, 4800, 3))
+
+
+def test_loopback_supplies_silence_after_speaker_stops() -> None:
+    class EmptyThenStop:
+        calls = 0
+
+        def get(self, timeout: float) -> bytes | None:
+            self.calls += 1
+            if self.calls == 1:
+                raise queue.Empty
+            return None
+
+    frames: list[bytes] = []
+    recorder = MicrophoneRecorder(
+        frames.append,
+        device=WASAPI_LOOPBACK_DEVICE,
+        frames_per_buffer=160,
+    )
+    recorder._queue = EmptyThenStop()
+    recorder._running.set()
+    recorder._pump_loop()
+
+    assert frames == [bytes(320)]
+
+
+def test_qwen_live_combines_source_and_translation_before_final() -> None:
+    updates: list[SentenceUpdate] = []
+    session = QwenLiveTranslateSession(
+        _FAKE_SETTINGS, on_sentence=updates.append
+    )
+
+    session._handle_event(
+        {
+            "type": "response.text.done",
+            "response_id": "resp_1",
+            "text": "最近的火车站在哪里？",
+        }
+    )
+    assert not updates[-1].is_final
+
+    session._handle_event(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item_1",
+            "transcript": "Where is the nearest train station?",
+            "language": "en",
+        }
+    )
+    assert updates[-1].is_final
+    assert updates[-1].source_language == "en"
+    assert updates[-1].translated_text == "最近的火车站在哪里？"
+
+
+def test_qwen_live_keeps_each_response_in_its_own_sentence() -> None:
+    """一个语音轮次里可能出现多个响应，后一个不能覆盖前一句的气泡。
+
+    早期实现按 speech_started 计数，于是第二个响应写回同一句，界面上表现
+    为「只识别出一个词之后就不再更新」。
+    """
+    updates: list[SentenceUpdate] = []
+    session = QwenLiveTranslateSession(
+        _FAKE_SETTINGS, on_sentence=updates.append
+    )
+
+    for index, (response_id, item_id, en, zh) in enumerate(
+        [
+            ("resp_1", "item_1", "Good morning.", "早上好。"),
+            ("resp_2", "item_2", "How are you?", "你好吗？"),
+        ]
+    ):
+        session._handle_event(
+            {
+                "type": "response.text.done",
+                "response_id": response_id,
+                "text": zh,
+            }
+        )
+        session._handle_event(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": item_id,
+                "transcript": en,
+                "language": "en",
+            }
+        )
+        assert updates[-1].sentence_id == index
+        assert updates[-1].source_text == en
+        assert updates[-1].translated_text == zh
+        assert updates[-1].is_final
+
+
+def test_qwen_live_pairs_source_and_translation_of_the_same_sentence() -> None:
+    """两条流的 ID 互不相同，必须按各自出现顺序配对回同一句。"""
+    updates: list[SentenceUpdate] = []
+    session = QwenLiveTranslateSession(
+        _FAKE_SETTINGS, on_sentence=updates.append
+    )
+
+    session._handle_event(
+        {
+            "type": "conversation.item.input_audio_transcription.text",
+            "item_id": "item_a",
+            "text": "",
+            "stash": "Hello",
+            "language": "en",
+        }
+    )
+    session._handle_event(
+        {
+            "type": "response.text.text",
+            "response_id": "resp_a",
+            "text": "",
+            "stash": "你好",
+        }
+    )
+
+    assert updates[-1].sentence_id == 0
+    assert updates[-1].source_text == "Hello"
+    assert updates[-1].translated_text == "你好"
+
+
+def test_qwen_live_skips_empty_trailing_response() -> None:
+    """尾部静音会触发一次空响应，放行会在界面上多出一个空气泡。"""
+    updates: list[SentenceUpdate] = []
+    session = QwenLiveTranslateSession(
+        _FAKE_SETTINGS, on_sentence=updates.append
+    )
+
+    session._handle_event(
+        {"type": "response.text.done", "response_id": "resp_empty", "text": "  "}
+    )
+    assert updates == []
 
 
 class _FakeRecognizer:
@@ -140,6 +287,21 @@ def test_shutdown_is_safe_without_any_turn() -> None:
     )
     created.shutdown(drain_timeout=1.0)
     assert created.active_speaker is None
+
+
+def test_foreign_audio_and_my_microphone_are_separate() -> None:
+    created = ConversationSession(
+        _FAKE_SETTINGS,
+        foreign_language="en",
+        on_message=lambda _: None,
+        foreign_input_device=-1,
+        my_input_device=7,
+    )
+    try:
+        assert created._foreign_input_device == -1
+        assert created._my_input_device == 7
+    finally:
+        created.shutdown(drain_timeout=1.0)
 
 
 # ---- 消息构造 ----

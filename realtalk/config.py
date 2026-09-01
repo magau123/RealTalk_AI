@@ -16,10 +16,8 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# 默认模型选择的依据见 README「技术选型」一节：
-# - gummy-realtime-v1 是百炼唯一在单条 WebSocket 内同时输出识别与翻译的模型
-# - qwen-mt-turbo 已被官方标注不再更新，故默认用 flash
-DEFAULT_ASR_MODEL = "gummy-realtime-v1"
+# Qwen3.5 LiveTranslate 是官方当前推荐的实时同传模型，内置 Qwen3 ASR。
+DEFAULT_ASR_MODEL = "qwen3.5-livetranslate-flash-realtime"
 DEFAULT_MT_MODEL = "qwen-mt-flash"
 DEFAULT_TTS_MODEL = "cosyvoice-v2"
 

@@ -27,7 +27,7 @@ import logging
 import queue
 import threading
 from collections.abc import Callable
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from dashscope.audio.asr import (
     TranscriptionResult,
@@ -47,6 +47,9 @@ from realtalk.core.events import (
 )
 from realtalk.core.translator import TextTranslator
 from realtalk.languages import AUTO, can_gummy_translate, language_name
+
+if TYPE_CHECKING:
+    from realtalk.core.qwen_listen import QwenLiveTranslateSession
 
 logger = logging.getLogger(__name__)
 
@@ -438,3 +441,14 @@ def _copy_update(update: SentenceUpdate) -> SentenceUpdate:
         target_language=update.target_language,
         translation_source=update.translation_source,
     )
+
+
+def create_listen_session(
+    settings: Settings, **kwargs: object
+) -> ListenSession | QwenLiveTranslateSession:
+    """按模型协议创建听译会话。Qwen LiveTranslate 与 Gummy 的协议不兼容。"""
+    if settings.asr_model.startswith("qwen3.5-livetranslate"):
+        from realtalk.core.qwen_listen import QwenLiveTranslateSession
+
+        return QwenLiveTranslateSession(settings, **kwargs)
+    return ListenSession(settings, **kwargs)

@@ -188,34 +188,40 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
     background: none;
 }}
 
+/* 消息整行铺满，说话人靠左侧色条区分：对方灰、我蓝、朗读中绿。 */
 QFrame#ForeignBubble {{
     background-color: {SURFACE_RAISED};
     border: 1px solid {BORDER};
-    border-radius: 12px;
+    border-left: 4px solid {TEXT_MUTED};
+    border-radius: 10px;
 }}
 
 QFrame#ForeignBubbleLive {{
     background-color: {SURFACE_RAISED};
-    border: 1px solid {ACCENT};
-    border-radius: 12px;
+    border: 1px solid {BORDER};
+    border-left: 4px solid {ACCENT};
+    border-radius: 10px;
 }}
 
 QFrame#MyBubble {{
     background-color: #1e2c47;
     border: 1px solid #2f4468;
-    border-radius: 12px;
+    border-left: 4px solid {ACCENT};
+    border-radius: 10px;
 }}
 
 QFrame#MyBubbleLive {{
     background-color: #1e2c47;
-    border: 1px solid {ACCENT};
-    border-radius: 12px;
+    border: 1px solid #2f4468;
+    border-left: 4px solid {ACCENT_HOVER};
+    border-radius: 10px;
 }}
 
 QFrame#MyBubbleSpeaking {{
     background-color: #1e2c47;
-    border: 1px solid {SUCCESS};
-    border-radius: 12px;
+    border: 1px solid #2f4468;
+    border-left: 4px solid {SUCCESS};
+    border-radius: 10px;
 }}
 
 QPushButton#TurnButton {{

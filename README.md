@@ -35,6 +35,10 @@
 
 点击其中一个会自动结束另一方的轮次。你说的每句话念完后，气泡上会出现「重新朗读」，对方没听清时可以重放。
 
+顶部“声音输入”中，真人面对面交流请选择“🎙 麦克风”；要翻译电脑或
+扬声器正在播放的声音，Windows 上请选择“🔊 系统声音（WASAPI 回环）”。
+两者不是同一个输入源。
+
 勾选顶部的「**自动识别说话人**」后切换到**自动模式**：两个按钮合并成一个「开始对话」，之后双方直接说话即可，系统自己判断每句是谁说的，不用再碰界面。
 
 ## 快速开始
@@ -113,7 +117,7 @@ python main.py
 | 鉴权 | 单个 API Key，长期有效 | AppKey + Token，Token 36~48 小时过期需自行刷新 |
 | 安装 | `pip install dashscope` | PyPI 无官方包，需下载源码本地安装 |
 | 多语言识别 | 参数级切换，支持 `source_language="auto"` | **每个语种需在控制台建独立项目、用独立 AppKey** |
-| 识别 + 翻译 | Gummy 模型在一条 WebSocket 内同时输出两者 | 无翻译能力，需外接翻译 API |
+| 识别 + 翻译 | Qwen3.5 LiveTranslate 在一条 WebSocket 内同时输出两者 | 无翻译能力，需外接翻译 API |
 | 回调数据 | 结构化对象 | JSON 字符串，需自行解析 |
 
 决定性因素是识别模型的绑定方式。NLS 的官方文档明确写着「语音识别服务不支持通过 API 参数动态切换模型，每个项目绑定一个固定的语音识别模型」。对话场景需要在中文和外语之间来回切换识别语种，用 NLS 就得为每个语种维护一套 AppKey 并在代码里切换，非常笨重。
@@ -122,12 +126,12 @@ python main.py
 
 | 环节 | 选择 | 说明 |
 |---|---|---|
-| 识别 + 翻译 | [`gummy-realtime-v1`](https://help.aliyun.com/zh/model-studio/real-time-python-sdk) | 唯一在单条连接内同时给出识别与翻译的模型。对话的两个方向都用它，只是源语言和目标语言对调 |
+| 识别 + 翻译 | [`qwen3.5-livetranslate-flash-realtime`](https://help.aliyun.com/zh/model-studio/qwen-livetranslate-python-sdk) | 官方当前推荐的实时同传模型，内置 `qwen3-asr-flash-realtime`，复杂音频下比旧 Gummy 更稳 |
 | 语音合成 | [`cosyvoice-v2`](https://help.aliyun.com/zh/model-studio/cosyvoice-python-sdk) | 输出 PCM 直接喂声卡，无需解码，首字延迟更低 |
-| 文本翻译 | [`qwen-mt-flash`](https://help.aliyun.com/zh/model-studio/qwen-mt-api)，不可用时自动降级 | 对话主链路用不到它，仅用于命令行诊断，以及 Gummy 无法直译时的兜底 |
-| 音频采集 / 播放 | `sounddevice` | 相比 `pyaudio`，在 Windows 与 Python 3.13 上有预编译 wheel，不需要本机编译环境 |
+| 文本翻译 | [`qwen-mt-flash`](https://help.aliyun.com/zh/model-studio/qwen-mt-api)，不可用时自动降级 | 自动模式中补做中文→外语翻译 |
+| 音频采集 / 播放 | `sounddevice` + Windows 下的 `PyAudioWPatch` | 麦克风用 sounddevice；电脑系统声音用 WASAPI 回环 |
 
-对话的两个方向都只用 Gummy 一条 WebSocket 完成识别和翻译，不需要额外的翻译请求。这是延迟最低的路径。
+实时模型只输出文本，回复语音仍由 CosyVoice 合成，因此界面中的男女音色选择继续有效。LiveTranslate 自带的唯一预置音色 Tina 是女声，不用于本项目播报。
 
 ### 翻译模型的自动降级
 
@@ -148,19 +152,19 @@ REALTALK_MT_MODEL=qwen-mt-plus
 
 ## 两种对话模式
 
-两种模式的共同前提：Gummy 的翻译目标语言**在建立连接时就固定了**，一条连接只能有一个翻译方向。因此不存在「两条链路同时开着」的选项 —— 那样你说的中文会被「外语→中文」那条也听进去按外语强行拟合成乱码，而且 Gummy 的识别与翻译分别计费，开两条就是四份费用。
+两种模式的共同前提：实时模型的翻译目标语言**在建立连接时就固定了**，一条连接只能有一个翻译方向。因此不存在「两条链路同时开着」的选项。
 
 ### 手动模式
 
 两个按钮显式切换发言人，各自开一条方向固定的连接：对方说话时是 `外语→中文`，你说话时是 `中文→外语`。
 
-优点是**延迟最低且不会认错语种**。两个方向的翻译都由 Gummy 在同一条连接内完成，没有任何额外的网络往返，源语种也是写死的，不存在误判。
+优点是**延迟最低且不会认错语种**。每个方向分别建立 Qwen3.5 LiveTranslate 会话，源语种明确。
 
 ### 自动模式
 
 单条连接，`source_language="auto"`，翻译目标**固定为中文**。每句话定稿后，根据识别文本判断是谁说的：
 
-- 判定为对方 → Gummy 已经给出中文译文，直接显示，延迟与手动模式完全相同
+- 判定为对方 → Qwen3.5 已经给出中文译文，直接显示
 - 判定为你 → 额外做一次中译外，再合成语音
 
 反过来把目标固定为外语是行不通的：那样对方的话会被翻成他自己的语言，等于没翻。所以只能固定中文，让"你说的话"走补翻译。这样安排的好处是，**额外那一跳只压在你这一侧，而你这一侧本来就要等语音合成**，多出的延迟被掩盖掉了。
@@ -207,6 +211,18 @@ REALTALK_MT_MODEL=qwen-mt-plus
 
 自动模式的翻译目标固定为中文，你说中文时 Gummy 实际在做中译中。实测它会把原文照抄回来当作"译文"。这个结果必须显式丢弃 —— 否则外语音色会拿着中文文本去念，对方完全听不懂。代码里 `_handle_auto_sentence` 专门做了这件事，并有测试锁定。
 
+**一次语音轮次里可能产生多个响应，句子边界不能按 `speech_started` 数。**
+
+Qwen3.5 LiveTranslate 把一句话拆成两条流：`conversation.item.*` 给原文，`response.*` 给译文，两者的 ID 互不相同。直觉上会以为「一次 `input_audio_buffer.speech_started` = 一句话」，但实测连续语音下服务端可能在同一个语音轮次里开出多个 `response`。按 `speech_started` 计数的话，后一个响应会写回前一句的气泡，界面上表现为**只识别出一个词之后就再也不更新**。正确做法是拿服务端自己的 `response_id` 与转写 `item_id` 当键，两条流按各自出现顺序一一配对。
+
+**VAD 断句阈值调小会显著拉低翻译质量。**
+
+`turn_detection_silence_duration_ms` 看上去只影响断句快慢，实际直接决定翻译质量：每个语音轮次是独立翻译的，切得越碎，模型能看到的上下文越少。实测同一段 27 秒英语，阈值 400ms 被切成 24 段，其中不少只有两三个字（「好的」「很高兴」），译文因为脱离上下文而语无伦次；阈值 800ms 切成 2 段，译文完整通顺。所以这里保持 800ms，不要为了「反应快」往下调。
+
+**尾部静音会触发一次内容为空白字符的响应。**
+
+语音结束后服务端还会再下发一个 `response`，其 `text` 不是空串而是若干空格。判空时必须先 `strip()`，否则界面上会多出一个空气泡。
+
 **识别结果里没有「检测到的语种」字段。**
 
 `TranscriptionResult` 只有 `sentence_id`、`text`、`is_sentence_end` 等，没有任何语种信息。`Translation.lang` 是**翻译目标语种**，不是检测出的源语种，不能拿来判断说话人。这就是本项目用书写系统判断而不是读取字段的原因。
@@ -252,7 +268,7 @@ RealTalk_AI/
 │   ├── languages.py            # 语种定义、Gummy 翻译方向矩阵、音色映射
 │   ├── cli.py                  # 命令行入口
 │   ├── audio/
-│   │   ├── recorder.py         # 麦克风采集（16kHz 单声道 PCM）
+│   │   ├── recorder.py         # 麦克风/WASAPI 回环采集并转换为 16kHz PCM
 │   │   └── player.py           # PCM 流式播放（线程安全）
 │   ├── core/                   # 业务逻辑，完全不依赖界面
 │   │   ├── conversation.py     # 对话会话，产品主入口
@@ -290,7 +306,7 @@ RealTalk_AI/
 | 变量 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
 | `DASHSCOPE_API_KEY` | 是 | — | 百炼 API Key |
-| `REALTALK_ASR_MODEL` | 否 | `gummy-realtime-v1` | 实时识别与翻译模型 |
+| `REALTALK_ASR_MODEL` | 否 | `qwen3.5-livetranslate-flash-realtime` | 实时识别与翻译模型 |
 | `REALTALK_MT_MODEL` | 否 | `qwen-mt-flash` | 文本翻译模型 |
 | `REALTALK_TTS_MODEL` | 否 | `cosyvoice-v2` | 语音合成模型 |
 | `REALTALK_MAX_END_SILENCE` | 否 | `800` | VAD 断句静音阈值（毫秒，200~6000）。调小则断句更快、对话感更强，但容易把长句切碎 |

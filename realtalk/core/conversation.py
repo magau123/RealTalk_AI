@@ -1,6 +1,6 @@
 """对话模式：与外国人面对面交流的双向同声传译。
 
-两个方向共用同一支麦克风，而 Gummy 的翻译目标语言在建立连接时就固定了，
+两个方向共用同一支麦克风，而实时模型的翻译目标语言在建立连接时就固定了，
 一条连接只能是「外语→中文」或「中文→外语」其中之一，无法中途切换。
 因此本模块采用**半双工**：同一时刻只有一条链路在跑，由使用者显式切换
 当前轮到谁说话。
@@ -27,7 +27,8 @@ from dataclasses import dataclass, replace
 from realtalk.audio.player import PcmStreamPlayer
 from realtalk.config import Settings
 from realtalk.core.events import ErrorEvent, SentenceUpdate, SessionState, StateEvent
-from realtalk.core.listen import ListenSession
+from realtalk.core.listen import ListenSession, create_listen_session
+from realtalk.core.qwen_listen import QwenLiveTranslateSession
 from realtalk.core.translator import TextTranslator
 from realtalk.core.tts import SpeechSynthesizerClient, SynthesisError
 from realtalk.languages import (
@@ -73,7 +74,7 @@ class ConversationStateEvent:
 class ConversationMessage:
     """对话中的一条消息。
 
-    message_id 带轮次前缀。Gummy 的 sentence_id 在每条新连接上都从 0 重新
+    message_id 带轮次前缀。实时引擎的 sentence_id 在每条新连接上都从 0 重新
     开始，只用它做标识的话，第二轮的第一句会覆盖第一轮的第一句。
     """
 
@@ -108,6 +109,8 @@ class ConversationSession:
         on_state: StateHandler | None = None,
         on_error: ErrorHandler | None = None,
         input_device: int | None = None,
+        foreign_input_device: int | None = None,
+        my_input_device: int | None = None,
         output_device: int | None = None,
         voice_id: str | None = None,
     ) -> None:
@@ -124,7 +127,12 @@ class ConversationSession:
         self._on_message = on_message
         self._on_state = on_state
         self._on_error = on_error
-        self._input_device = input_device
+        self._foreign_input_device = (
+            foreign_input_device
+            if foreign_input_device is not None
+            else input_device
+        )
+        self._my_input_device = my_input_device
         self._voice = self._resolve_voice(voice_id)
 
         self._synthesizer = SpeechSynthesizerClient(settings)
@@ -132,7 +140,7 @@ class ConversationSession:
 
         self._translator = TextTranslator(settings)
 
-        self._active: ListenSession | None = None
+        self._active: ListenSession | QwenLiveTranslateSession | None = None
         self._active_speaker: Speaker | None = None
         self._mode: TurnMode | None = None
         self._turn_index = 0
@@ -213,6 +221,11 @@ class ConversationSession:
             session = self._open_session(
                 source_language=source,
                 target_language=target,
+                input_device=(
+                    self._foreign_input_device
+                    if speaker is Speaker.FOREIGN
+                    else self._my_input_device
+                ),
                 on_sentence=lambda update: self._handle_sentence(
                     update, speaker=speaker, turn=turn
                 ),
@@ -235,7 +248,7 @@ class ConversationSession:
     def start_auto(self) -> None:
         """开启自动模式：一条连接，按识别文本判断说话人。
 
-        源语种设为 auto、翻译目标固定为中文。对方说外语时 Gummy 直接给出
+        源语种设为 auto、翻译目标固定为中文。对方说外语时实时模型直接给出
         流式中文译文，延迟与手动模式完全相同；只有我说中文时才需要额外一次
         中译外，而那一侧本来就要等语音合成，多出的这一跳被掩盖掉了。
 
@@ -253,6 +266,7 @@ class ConversationSession:
             session = self._open_session(
                 source_language=AUTO,
                 target_language=CHINESE,
+                input_device=self._foreign_input_device,
                 on_sentence=lambda update: self._handle_auto_sentence(update, turn),
             )
             if session is None:
@@ -288,16 +302,17 @@ class ConversationSession:
         *,
         source_language: str,
         target_language: str,
+        input_device: int | None,
         on_sentence: Callable[[SentenceUpdate], None],
-    ) -> ListenSession | None:
-        session = ListenSession(
+    ) -> ListenSession | QwenLiveTranslateSession | None:
+        session = create_listen_session(
             self._settings,
             on_sentence=on_sentence,
             on_state=self._handle_inner_state,
             on_error=self._forward_error,
             source_language=source_language,
             target_language=target_language,
-            device=self._input_device,
+            device=input_device,
         )
         try:
             session.start()
@@ -342,7 +357,7 @@ class ConversationSession:
             return
 
         if speaker is Speaker.ME:
-            # Gummy 此时在做中译中，结果要么是原文要么为空，两种都不能当译文
+            # 此时模型在做中译中，结果要么是原文要么为空，两种都不能当译文
             # 用——直接拿去合成会让对方听到外语音色念中文。清空后交给补翻译。
             update = replace(update, translated_text="")
 
@@ -444,8 +459,8 @@ class ConversationSession:
     ) -> ConversationMessage | None:
         """译文缺失时补一次中译外。
 
-        自动模式下 Gummy 的翻译目标固定为中文，我说的中文拿不到外语译文，
-        必须在这里补。手动模式通常用不到，但 Gummy 偶尔漏译时它同样兜底。
+        自动模式下翻译目标固定为中文，我说的中文拿不到外语译文，必须在这里
+        补。手动模式通常用不到，但实时模型偶尔漏译时它同样兜底。
         """
         if message.translated_text:
             return message

@@ -22,6 +22,7 @@ class TranslationSource(enum.Enum):
     """译文的来源，界面上可据此提示用户当前走的是哪条链路。"""
 
     GUMMY = "gummy"          # Gummy 内置翻译，与识别同一条连接
+    QWEN_LIVE = "qwen-live"  # Qwen3.5 LiveTranslate 实时翻译
     QWEN_MT = "qwen-mt"      # 兜底：Gummy 只转写，再由文本翻译模型补译
     NONE = "none"            # 尚无译文
 
