@@ -183,13 +183,16 @@ class ConversationPage(QWidget):
     _stateChanged = Signal(object)
     _errorOccurred = Signal(object)
     opacityChanged = Signal(int)
+    subtitleModeChanged = Signal(bool)
 
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._settings = settings
         self._session: ConversationSession | None = None
         self._bubbles: dict[str, MessageBubble] = {}
+        self._latest_message: ConversationMessage | None = None
         self._listening_requested = False
+        self._subtitle_mode = False
         self._settle_pending = False
         self._scroll_pending = False
 
@@ -208,15 +211,38 @@ class ConversationPage(QWidget):
 
         self._create_action_buttons()
 
-        root.addLayout(self._build_header())
-        root.addWidget(self._build_settings_panel())
-        root.addLayout(self._build_action_row())
-        root.addWidget(self._build_transcript(), stretch=1)
+        self._header_widget = QWidget()
+        self._header_widget.setObjectName("Header")
+        self._header_widget.setLayout(self._build_header())
+        root.addWidget(self._header_widget)
+
+        self._settings_panel = self._build_settings_panel()
+        root.addWidget(self._settings_panel)
+
+        self._action_widget = QWidget()
+        self._action_widget.setObjectName("ActionBar")
+        self._action_widget.setLayout(self._build_action_row())
+        root.addWidget(self._action_widget)
+
+        self._scroll = self._build_transcript()
+        root.addWidget(self._scroll, stretch=1)
 
         self._status = QLabel("已就绪。点击「开始检测英语」后接收并实时翻译。")
         self._status.setObjectName("StatusLabel")
         self._status.setWordWrap(True)
         root.addWidget(self._status)
+
+        self._subtitle_panel = self._build_subtitle_panel()
+        self._subtitle_panel.hide()
+        root.addWidget(self._subtitle_panel, stretch=1)
+
+        self._normal_widgets = (
+            self._header_widget,
+            self._settings_panel,
+            self._action_widget,
+            self._scroll,
+            self._status,
+        )
 
     def _build_header(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -232,6 +258,12 @@ class ConversationPage(QWidget):
         title_column.addWidget(subtitle)
         row.addLayout(title_column)
         row.addStretch(1)
+
+        self._subtitle_button = QPushButton("字幕模式")
+        self._subtitle_button.setObjectName("QuietButton")
+        self._subtitle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._subtitle_button.clicked.connect(self._toggle_subtitle_mode)
+        row.addWidget(self._subtitle_button)
 
         self._opacity_label = QLabel("界面透明度 100%")
         self._opacity_label.setObjectName("OpacityLabel")
@@ -312,6 +344,29 @@ class ConversationPage(QWidget):
         row.addWidget(self._speak_button, stretch=1)
         row.addWidget(self._clear_button)
         return row
+
+    def _build_subtitle_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("SubtitlePanel")
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(18, 12, 12, 12)
+        layout.setSpacing(12)
+
+        self._subtitle_label = QLabel("等待字幕 …")
+        self._subtitle_label.setObjectName("SubtitleText")
+        self._subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._subtitle_label.setWordWrap(True)
+        self._subtitle_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self._subtitle_label, stretch=1)
+
+        self._exit_subtitle_button = QPushButton("退出字幕")
+        self._exit_subtitle_button.setObjectName("QuietButton")
+        self._exit_subtitle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._exit_subtitle_button.clicked.connect(self._toggle_subtitle_mode)
+        layout.addWidget(self._exit_subtitle_button)
+        return panel
 
     def _build_transcript(self) -> QScrollArea:
         self._scroll = _TranscriptArea()
@@ -418,6 +473,28 @@ class ConversationPage(QWidget):
         self._opacity_label.setText(f"界面透明度 {value}%")
         self.opacityChanged.emit(value)
 
+    def _toggle_subtitle_mode(self) -> None:
+        self.set_subtitle_mode(not self._subtitle_mode)
+
+    def set_subtitle_mode(self, enabled: bool) -> None:
+        if self._subtitle_mode == enabled:
+            return
+        self._subtitle_mode = enabled
+        for widget in self._normal_widgets:
+            widget.setVisible(not enabled)
+        self._subtitle_panel.setVisible(enabled)
+        if enabled:
+            self._update_subtitle(self._latest_message)
+        self.subtitleModeChanged.emit(enabled)
+
+    def _update_subtitle(self, message: ConversationMessage | None) -> None:
+        if message is None:
+            self._subtitle_label.setText("等待字幕 …")
+            return
+        self._subtitle_label.setText(
+            message.translated_text or message.original_text or "正在识别 …"
+        )
+
     def _begin(self, action) -> None:  # noqa: ANN001
         """在后台线程切换通道，避免 WebSocket 握手卡住界面。"""
         active = self._ensure_session()
@@ -484,6 +561,13 @@ class ConversationPage(QWidget):
         self._placeholder.hide()
 
         bubble = self._bubbles.get(message.message_id)
+        if bubble is None or (
+            self._latest_message is not None
+            and self._latest_message.message_id == message.message_id
+        ):
+            # 旧句的完成事件可能晚于新句到达，不能让字幕跳回上一句。
+            self._latest_message = message
+            self._update_subtitle(message)
         scrollbar = self._scroll.verticalScrollBar()
         at_bottom = scrollbar.value() >= scrollbar.maximum() - 60
 
@@ -608,5 +692,7 @@ class ConversationPage(QWidget):
             self._transcript.removeWidget(bubble)
             bubble.deleteLater()
         self._bubbles.clear()
+        self._latest_message = None
+        self._update_subtitle(None)
         self._placeholder.show()
         self._scroll.sync_content_height()

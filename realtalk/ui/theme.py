@@ -53,6 +53,18 @@ QFrame#SettingsPanel {{
     border-radius: 12px;
 }}
 
+QFrame#SubtitlePanel {{
+    background-color: #ffffff;
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+}}
+
+QLabel#SubtitleText {{
+    color: #000000;
+    font-size: 22px;
+    font-weight: 600;
+}}
+
 QLabel#SectionTitle {{
     font-size: 11px;
     font-weight: 600;

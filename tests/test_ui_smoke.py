@@ -309,3 +309,62 @@ def test_opacity_slider_updates_the_whole_window(qapp: QApplication) -> None:
         assert window.windowOpacity() == pytest.approx(0.72, abs=0.01)
     finally:
         window.close()
+
+
+def test_subtitle_mode_only_shows_the_current_segment(
+    qapp: QApplication,
+) -> None:
+    """字幕只跟随最新句；上一句迟到的完成事件不能把字幕跳回去。"""
+    from realtalk.ui.conversation_page import ConversationPage
+
+    page = ConversationPage(_FAKE_SETTINGS)
+    try:
+        page.set_subtitle_mode(True)
+        assert page._subtitle_panel.isVisibleTo(page)
+        assert all(widget.isHidden() for widget in page._normal_widgets)
+
+        page._on_message_ui(
+            _message("t1-s0", Speaker.FOREIGN, "Hello", "你好")
+        )
+        assert page._subtitle_label.text() == "你好"
+
+        page._on_message_ui(
+            _message("t1-s1", Speaker.FOREIGN, "How are you?", "你好吗？")
+        )
+        assert page._subtitle_label.text() == "你好吗？"
+
+        page._on_message_ui(
+            _message("t1-s0", Speaker.FOREIGN, "Hello!", "你好！", is_final=True)
+        )
+        assert page._subtitle_label.text() == "你好吗？"
+    finally:
+        page.deleteLater()
+
+
+def test_subtitle_mode_uses_compact_always_on_top_window(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtCore import Qt
+
+    from realtalk.ui.main_window import build_window
+
+    window = build_window(_FAKE_SETTINGS)
+    try:
+        window.show()
+        qapp.processEvents()
+        original = window.geometry()
+
+        window._page.set_subtitle_mode(True)
+        qapp.processEvents()
+        assert window.size().width() == 820
+        assert window.size().height() == 160
+        assert window._footer.isHidden()
+        assert window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+        window._page.set_subtitle_mode(False)
+        qapp.processEvents()
+        assert not window._footer.isHidden()
+        assert not (window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        assert window.geometry() == original
+    finally:
+        window.close()
