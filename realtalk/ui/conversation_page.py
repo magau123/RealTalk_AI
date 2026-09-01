@@ -1,11 +1,8 @@
 """对话界面：面对面双语交流的单一视图。
 
-布局像聊天记录：对方的话靠左，我的话靠右。每条气泡上方是原文（小字、
-弱化），下方是译文（大字、主色）——因为使用者真正要读的是译文，原文
-只用于确认识别是否准确。
-
-半双工由两个大按钮控制。点击其中一个会自动结束另一方的轮次，因此不会
-出现两条链路同时开着的情况。
+对话记录按时间整行排列，每条消息上方是原文（小字、弱化），下方是译文
+（大字、主色）。英语监听由独立开关控制；中文回复仍采用半双工，回复期间
+暂停英语输入，说完后按开关状态决定是否恢复监听。
 
 线程处理与其他页面一致：核心层回调来自后台线程，一律通过 Qt Signal
 投递到 UI 线程；会阻塞的启停操作放到后台线程执行。
@@ -19,11 +16,13 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -183,13 +182,14 @@ class ConversationPage(QWidget):
     _messageReceived = Signal(object)
     _stateChanged = Signal(object)
     _errorOccurred = Signal(object)
+    opacityChanged = Signal(int)
 
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._settings = settings
         self._session: ConversationSession | None = None
         self._bubbles: dict[str, MessageBubble] = {}
-        self._started_default_listener = False
+        self._listening_requested = False
         self._settle_pending = False
         self._scroll_pending = False
 
@@ -203,43 +203,76 @@ class ConversationPage(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(24, 20, 24, 14)
+        root.setSpacing(14)
 
-        self._create_speak_button()
+        self._create_action_buttons()
 
-        root.addLayout(self._build_settings_row())
+        root.addLayout(self._build_header())
+        root.addWidget(self._build_settings_panel())
+        root.addLayout(self._build_action_row())
         root.addWidget(self._build_transcript(), stretch=1)
 
-        self._status = QLabel("正在准备系统英语实时翻译 …")
+        self._status = QLabel("已就绪。点击「开始检测英语」后接收并实时翻译。")
         self._status.setObjectName("StatusLabel")
         self._status.setWordWrap(True)
         root.addWidget(self._status)
 
-        root.addWidget(self._speak_button)
-
-    def _build_settings_row(self) -> QHBoxLayout:
+    def _build_header(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(10)
 
-        row.addWidget(self._caption("对方语言"))
+        title_column = QVBoxLayout()
+        title_column.setSpacing(2)
+        title = QLabel("RealTalk")
+        title.setObjectName("AppTitle")
+        subtitle = QLabel("实时双向语音翻译")
+        subtitle.setObjectName("AppSubtitle")
+        title_column.addWidget(title)
+        title_column.addWidget(subtitle)
+        row.addLayout(title_column)
+        row.addStretch(1)
+
+        self._opacity_label = QLabel("界面透明度 100%")
+        self._opacity_label.setObjectName("OpacityLabel")
+        row.addWidget(self._opacity_label)
+
+        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._opacity_slider.setObjectName("OpacitySlider")
+        self._opacity_slider.setRange(50, 100)
+        self._opacity_slider.setValue(100)
+        self._opacity_slider.setFixedWidth(130)
+        self._opacity_slider.setToolTip("拖动调整整个窗口的透明度，最低 50%")
+        self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        row.addWidget(self._opacity_slider)
+        return row
+
+    def _build_settings_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("SettingsPanel")
+        grid = QGridLayout(panel)
+        grid.setContentsMargins(16, 12, 16, 14)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+
+        grid.addWidget(self._caption("对方语言"), 0, 0)
         self._language_combo = QComboBox()
         for code in conversation_languages():
             self._language_combo.addItem(language_name(code), code)
         self._language_combo.currentIndexChanged.connect(self._reload_voices)
-        row.addWidget(self._language_combo)
+        grid.addWidget(self._language_combo, 1, 0)
 
-        row.addWidget(self._caption("对方听到的音色"))
+        grid.addWidget(self._caption("回复音色"), 0, 1)
         self._voice_combo = QComboBox()
         self._voice_combo.currentIndexChanged.connect(self._restart_default_listener)
-        row.addWidget(self._voice_combo, stretch=1)
+        grid.addWidget(self._voice_combo, 1, 1)
 
         devices = list_input_devices()
 
-        row.addWidget(self._caption("英语声音来源"))
+        grid.addWidget(self._caption("英语声音来源"), 0, 2)
         self._foreign_device_combo = QComboBox()
         self._foreign_device_combo.setToolTip(
-            "默认监听电脑正在播放的声音，并实时翻译为中文。"
+            "选择电脑回环声音，或在没有回环设备时使用默认麦克风。"
         )
         loopback_index = None
         for device in devices:
@@ -256,22 +289,28 @@ class ConversationPage(QWidget):
         self._foreign_device_combo.currentIndexChanged.connect(
             self._restart_default_listener
         )
-        row.addWidget(self._foreign_device_combo, stretch=1)
+        grid.addWidget(self._foreign_device_combo, 1, 2)
 
-        row.addWidget(self._caption("我的麦克风"))
+        grid.addWidget(self._caption("我的麦克风"), 0, 3)
         self._mic_combo = QComboBox()
         self._mic_combo.addItem("🎙 系统默认麦克风", None)
         for device in devices:
             if "回环" not in device.name:
                 self._mic_combo.addItem(f"🎙 {device.name}", device.index)
         self._mic_combo.currentIndexChanged.connect(self._restart_default_listener)
-        row.addWidget(self._mic_combo, stretch=1)
-
-        self._clear_button = QPushButton("清空")
-        self._clear_button.clicked.connect(self._clear_transcript)
-        row.addWidget(self._clear_button)
+        grid.addWidget(self._mic_combo, 1, 3)
+        for column in range(4):
+            grid.setColumnStretch(column, 1)
 
         self._reload_voices()
+        return panel
+
+    def _build_action_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(self._listen_button, stretch=1)
+        row.addWidget(self._speak_button, stretch=1)
+        row.addWidget(self._clear_button)
         return row
 
     def _build_transcript(self) -> QScrollArea:
@@ -290,19 +329,29 @@ class ConversationPage(QWidget):
 
         self._placeholder = QLabel(
             "对话内容会显示在这里。\n\n"
-            "默认持续接收电脑播放的英语并翻译为中文。\n"
-            "需要回复时，点击下方「我要说中文」。"
+            "点击「开始检测英语」，接收声音并实时翻译为中文。\n"
+            "需要回复时，点击「我要说中文」。"
         )
         self._placeholder.setObjectName("HintLabel")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._transcript.insertWidget(0, self._placeholder)
         return self._scroll
 
-    def _create_speak_button(self) -> None:
+    def _create_action_buttons(self) -> None:
+        self._listen_button = QPushButton("开始检测英语")
+        self._listen_button.setObjectName("ListenButton")
+        self._listen_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._listen_button.clicked.connect(self._on_listen_clicked)
+
         self._speak_button = QPushButton("我要说中文")
         self._speak_button.setObjectName("TurnButton")
         self._speak_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._speak_button.clicked.connect(self._on_speak_clicked)
+
+        self._clear_button = QPushButton("清空记录")
+        self._clear_button.setObjectName("QuietButton")
+        self._clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clear_button.clicked.connect(self._clear_transcript)
 
     @staticmethod
     def _caption(text: str) -> QLabel:
@@ -312,9 +361,11 @@ class ConversationPage(QWidget):
 
     def _reload_voices(self) -> None:
         code = self._language_combo.currentData()
+        self._voice_combo.blockSignals(True)
         self._voice_combo.clear()
         for voice in TTS_VOICES.get(code, ()):
             self._voice_combo.addItem(voice.zh_label, voice.voice_id)
+        self._voice_combo.blockSignals(False)
         self._restart_default_listener()
 
     # ---- 交互 ----
@@ -322,23 +373,50 @@ class ConversationPage(QWidget):
     def _current_language(self) -> str:
         return self._language_combo.currentData()
 
-    def showEvent(self, event) -> None:  # noqa: ANN001, N802
-        super().showEvent(event)
-        if not self._started_default_listener:
-            self._started_default_listener = True
-            QTimer.singleShot(0, self._start_default_listener)
-
     def _start_default_listener(self) -> None:
         self._begin(lambda active: active.start_turn(Speaker.FOREIGN))
 
+    def _on_listen_clicked(self) -> None:
+        if self._listening_requested:
+            self._listening_requested = False
+            self._refresh_action_buttons()
+            self._stop_current_session()
+            return
+
+        self._listening_requested = True
+        self._refresh_action_buttons()
+        self._start_default_listener()
+
     def _on_speak_clicked(self) -> None:
         session = self._session
-        speaker = (
-            Speaker.FOREIGN
-            if session is not None and session.active_speaker is Speaker.ME
-            else Speaker.ME
-        )
-        self._begin(lambda active: active.start_turn(speaker))
+        if session is not None and session.active_speaker is Speaker.ME:
+            if self._listening_requested:
+                self._start_default_listener()
+            else:
+                self._stop_current_session()
+            return
+        self._begin(lambda active: active.start_turn(Speaker.ME))
+
+    def _stop_current_session(self) -> None:
+        session = self._session
+        if session is None or not session.is_running:
+            self._set_status("英语检测已关闭。", TEXT_MUTED)
+            self._set_controls_enabled(True)
+            return
+        self._set_controls_enabled(False)
+        self._set_status("正在关闭英语检测 …", TEXT_SECONDARY)
+
+        def run() -> None:
+            try:
+                session.stop()
+            except Exception as exc:
+                self._errorOccurred.emit(ErrorEvent(message=str(exc)))
+
+        threading.Thread(target=run, name="realtalk-stop", daemon=True).start()
+
+    def _on_opacity_changed(self, value: int) -> None:
+        self._opacity_label.setText(f"界面透明度 {value}%")
+        self.opacityChanged.emit(value)
 
     def _begin(self, action) -> None:  # noqa: ANN001
         """在后台线程切换通道，避免 WebSocket 握手卡住界面。"""
@@ -374,7 +452,7 @@ class ConversationPage(QWidget):
     def _restart_default_listener(self, *_: object) -> None:
         old = self._session
         self._session = None
-        if not self.isVisible():
+        if not self.isVisible() or not self._listening_requested:
             if old is not None:
                 self._run_async(old.shutdown)
             return
@@ -453,7 +531,9 @@ class ConversationPage(QWidget):
             return
 
         self._set_controls_enabled(True)
-        self._refresh_speak_button()
+        if event.state is ConversationState.FAILED:
+            self._listening_requested = False
+        self._refresh_action_buttons()
 
         running = (
             ConversationState.FOREIGN_TURN,
@@ -469,29 +549,50 @@ class ConversationPage(QWidget):
 
     def _on_error_ui(self, event: ErrorEvent) -> None:
         self._set_controls_enabled(True)
-        self._refresh_speak_button()
+        self._refresh_action_buttons()
         self._set_status(event.message, WARNING)
 
-    def _refresh_speak_button(self) -> None:
+    def _refresh_action_buttons(self) -> None:
         session = self._session
         active = session.active_speaker if session is not None else None
+        self._apply_turn_button(
+            self._listen_button,
+            active=self._listening_requested,
+            idle_text="开始检测英语",
+            active_text="关闭英语检测",
+            idle_name="ListenButton",
+            active_name="ListenButtonActive",
+        )
         self._apply_turn_button(
             self._speak_button,
             active=active is Speaker.ME,
             idle_text="我要说中文",
-            active_text=f"说完了，继续听{language_name(self._current_language())}",
+            active_text=(
+                f"说完了，继续听{language_name(self._current_language())}"
+                if self._listening_requested
+                else "说完了，停止录音"
+            ),
+            idle_name="TurnButton",
+            active_name="TurnButtonActive",
         )
 
     @staticmethod
     def _apply_turn_button(
-        button: QPushButton, *, active: bool, idle_text: str, active_text: str
+        button: QPushButton,
+        *,
+        active: bool,
+        idle_text: str,
+        active_text: str,
+        idle_name: str,
+        active_name: str,
     ) -> None:
         button.setText(active_text if active else idle_text)
-        button.setObjectName("TurnButtonActive" if active else "TurnButton")
+        button.setObjectName(active_name if active else idle_name)
         button.style().unpolish(button)
         button.style().polish(button)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
+        self._listen_button.setEnabled(enabled)
         self._speak_button.setEnabled(enabled)
         self._language_combo.setEnabled(enabled)
         self._voice_combo.setEnabled(enabled)

@@ -253,15 +253,59 @@ def test_long_messages_scroll_to_latest_instead_of_blank_space(
         page.deleteLater()
 
 
-def test_page_has_one_reply_button_and_separate_inputs(qapp: QApplication) -> None:
+def test_page_has_listen_toggle_reply_button_and_separate_inputs(
+    qapp: QApplication,
+) -> None:
     from realtalk.ui.conversation_page import ConversationPage
 
     page = ConversationPage(_FAKE_SETTINGS)
     try:
+        assert page._listen_button.text() == "开始检测英语"
         assert page._speak_button.text() == "我要说中文"
-        assert not hasattr(page, "_foreign_button")
-        assert not hasattr(page, "_my_button")
         assert page._foreign_device_combo is not page._mic_combo
         assert "麦克风" in page._mic_combo.currentText()
     finally:
         page.deleteLater()
+
+
+def test_listen_button_explicitly_starts_and_stops_detection(
+    qapp: QApplication,
+) -> None:
+    """启动时不偷开录音；开始和关闭都只由英语检测按钮决定。"""
+    from realtalk.ui.conversation_page import ConversationPage
+
+    page = ConversationPage(_FAKE_SETTINGS)
+    calls = []
+    page._start_default_listener = lambda: calls.append("start")
+    page._stop_current_session = lambda: calls.append("stop")
+    try:
+        page.show()
+        qapp.processEvents()
+        assert page._session is None
+        assert not page._listening_requested
+
+        page._on_listen_clicked()
+        assert calls == ["start"]
+        assert page._listening_requested
+        assert page._listen_button.text() == "关闭英语检测"
+
+        page._on_listen_clicked()
+        assert calls == ["start", "stop"]
+        assert not page._listening_requested
+        assert page._listen_button.text() == "开始检测英语"
+    finally:
+        page.close()
+        page.deleteLater()
+
+
+def test_opacity_slider_updates_the_whole_window(qapp: QApplication) -> None:
+    from realtalk.ui.main_window import build_window
+
+    window = build_window(_FAKE_SETTINGS)
+    try:
+        window._page._opacity_slider.setValue(72)
+        assert window._page._opacity_label.text() == "界面透明度 72%"
+        # Windows 把窗口透明度量化为 8 bit，72% 实际读回约 71.76%
+        assert window.windowOpacity() == pytest.approx(0.72, abs=0.01)
+    finally:
+        window.close()

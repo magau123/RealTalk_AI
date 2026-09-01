@@ -22,6 +22,9 @@ class MainWindow(QWidget):
         self.setMinimumSize(760, 600)
 
         self._page = ConversationPage(settings)
+        self._page.opacityChanged.connect(
+            lambda percent: self.setWindowOpacity(percent / 100)
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -31,11 +34,10 @@ class MainWindow(QWidget):
 
     def _build_footer(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        row.setContentsMargins(20, 0, 20, 10)
+        row.setContentsMargins(24, 0, 24, 10)
 
         info = QLabel(
-            f"识别与翻译 {self._settings.asr_model}　·　"
-            f"语音合成 {self._settings.tts_model}　·　"
+            f"Qwen 实时翻译　·　CosyVoice 语音合成　·　"
             f"API Key {self._settings.masked_api_key}"
         )
         info.setObjectName("HintLabel")
