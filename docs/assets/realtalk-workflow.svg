@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">RealTalk_AI &#x5B9E;&#x65F6;&#x8BED;&#x97F3;&#x7FFB;&#x8BD1;&#x6D41;&#x7A0B;</title>
+  <desc id="desc">Real-time two-way speech translation workflow</desc>
+  <defs>
+    <linearGradient id="header" x1="0" x2="1">
+      <stop offset="0" stop-color="#eff6ff"/>
+      <stop offset="1" stop-color="#f8fafc"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".08"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#2563eb"/>
+    </marker>
+    <style>
+      .title{font:700 26px "Microsoft YaHei UI","PingFang SC",sans-serif;fill:#0f172a}
+      .lane-title{font:700 16px "Microsoft YaHei UI","PingFang SC",sans-serif;fill:#334155}
+      .node-title{font:700 14px "Microsoft YaHei UI","PingFang SC",sans-serif;fill:#0f172a}
+      .node-sub{font:12px "Microsoft YaHei UI","PingFang SC",sans-serif;fill:#64748b}
+      .edge{fill:none;stroke:#64748b;stroke-width:2;marker-end:url(#arrow)}
+      .edge-blue{fill:none;stroke:#2563eb;stroke-width:2.5;marker-end:url(#arrowBlue)}
+      .branch{fill:none;stroke:#7c3aed;stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow)}
+      .node{fill:#fff;stroke:#cbd5e1;stroke-width:1.5;rx:12;filter:url(#shadow)}
+      .cloud{fill:#fffbeb;stroke:#f59e0b}
+      .ui{fill:#eff6ff;stroke:#3b82f6}
+      .control{fill:#f0fdf4;stroke:#22c55e}
+    </style>
+  </defs>
+
+  <rect width="1200" height="500" fill="#ffffff"/>
+  <rect x="24" y="20" width="1152" height="58" rx="16" fill="url(#header)" stroke="#dbeafe"/>
+  <text x="52" y="57" class="title">RealTalk_AI &#x5B9E;&#x65F6;&#x8BED;&#x97F3;&#x7FFB;&#x8BD1;&#x6D41;&#x7A0B;</text>
+  <text x="1148" y="54" text-anchor="end" class="node-sub">Qwen3.5 LiveTranslate / Qwen-MT / CosyVoice</text>
+
+  <rect x="24" y="98" width="1152" height="158" rx="18" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="48" y="128" class="lane-title">01 / &#x542C;&#x8BD1;&#x4E3B;&#x94FE;&#x8DEF;</text>
+
+  <rect x="54" y="153" width="150" height="72" class="node"/>
+  <text x="129" y="183" text-anchor="middle" class="node-title">&#x58F0;&#x97F3;&#x8F93;&#x5165;</text>
+  <text x="129" y="204" text-anchor="middle" class="node-sub">EN / JA / AUTO</text>
+
+  <path d="M204 189 H238" class="edge"/>
+  <rect x="238" y="153" width="150" height="72" class="node control"/>
+  <text x="313" y="183" text-anchor="middle" class="node-title">PCM &#x91C7;&#x96C6;</text>
+  <text x="313" y="204" text-anchor="middle" class="node-sub">16 kHz / WebSocket</text>
+
+  <path d="M388 189 H422" class="edge-blue"/>
+  <rect x="422" y="153" width="150" height="72" class="node cloud"/>
+  <text x="497" y="183" text-anchor="middle" class="node-title">Qwen &#x5B9E;&#x65F6;&#x540C;&#x4F20;</text>
+  <text x="497" y="204" text-anchor="middle" class="node-sub">AUTO -&gt; ZH</text>
+
+  <path d="M572 189 H606" class="edge-blue"/>
+  <rect x="606" y="153" width="150" height="72" class="node control"/>
+  <text x="681" y="183" text-anchor="middle" class="node-title">&#x4E8B;&#x4EF6;&#x914D;&#x5BF9;</text>
+  <text x="681" y="204" text-anchor="middle" class="node-sub">item_id + response_id</text>
+
+  <path d="M756 189 H790" class="edge"/>
+  <rect x="790" y="153" width="150" height="72" class="node ui"/>
+  <text x="865" y="183" text-anchor="middle" class="node-title">&#x5BF9;&#x8BDD;&#x8BB0;&#x5F55;</text>
+  <text x="865" y="204" text-anchor="middle" class="node-sub">Source + ZH</text>
+
+  <path d="M940 189 H974" class="edge"/>
+  <rect x="974" y="153" width="150" height="72" class="node ui"/>
+  <text x="1049" y="183" text-anchor="middle" class="node-title">&#x5B57;&#x5E55;&#x5C0F;&#x7A97;</text>
+  <text x="1049" y="204" text-anchor="middle" class="node-sub">Latest sentence</text>
+
+  <rect x="24" y="278" width="1152" height="158" rx="18" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="48" y="308" class="lane-title">02 / &#x4E2D;&#x6587;&#x56DE;&#x590D;&#x94FE;&#x8DEF;</text>
+
+  <rect x="54" y="333" width="150" height="72" class="node"/>
+  <text x="129" y="363" text-anchor="middle" class="node-title">&#x6211;&#x8BF4;&#x4E2D;&#x6587;</text>
+  <text x="129" y="384" text-anchor="middle" class="node-sub">Microphone</text>
+
+  <path d="M204 369 H278" class="edge"/>
+  <rect x="278" y="333" width="150" height="72" class="node control"/>
+  <text x="353" y="363" text-anchor="middle" class="node-title">&#x534A;&#x53CC;&#x5DE5;&#x5207;&#x6362;</text>
+  <text x="353" y="384" text-anchor="middle" class="node-sub">Echo guard</text>
+
+  <path d="M428 369 H502" class="edge-blue"/>
+  <rect x="502" y="333" width="150" height="72" class="node cloud"/>
+  <text x="577" y="363" text-anchor="middle" class="node-title">Qwen &#x7FFB;&#x8BD1;</text>
+  <text x="577" y="384" text-anchor="middle" class="node-sub">ZH -&gt; target</text>
+
+  <path d="M652 369 H726" class="edge-blue"/>
+  <rect x="726" y="333" width="150" height="72" class="node cloud"/>
+  <text x="801" y="363" text-anchor="middle" class="node-title">CosyVoice</text>
+  <text x="801" y="384" text-anchor="middle" class="node-sub">Streaming TTS</text>
+
+  <path d="M876 369 H950" class="edge"/>
+  <rect x="950" y="333" width="174" height="72" class="node ui"/>
+  <text x="1037" y="363" text-anchor="middle" class="node-title">&#x626C;&#x58F0;&#x5668;&#x64AD;&#x653E;</text>
+  <text x="1037" y="384" text-anchor="middle" class="node-sub">Target audio</text>
+
+  <path d="M313 225 V295 H353 V333" class="branch"/>
+  <rect x="278" y="270" width="110" height="24" rx="12" fill="#f5f3ff" stroke="#c4b5fd"/>
+  <text x="333" y="287" text-anchor="middle" class="node-sub">&#x6211;&#x8981;&#x8BF4;&#x4E2D;&#x6587;</text>
+
+  <text x="24" y="474" class="node-sub">Interactive version: docs/assets/realtalk-workflow.html</text>
+</svg>

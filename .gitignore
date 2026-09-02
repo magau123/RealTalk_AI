@@ -62,6 +62,9 @@ probe_*.txt
 !assets/**/*.wav
 !assets/**/*.mp3
 
+# Archify 交付时的私有快照，不进入仓库
+docs/assets/.archify-delivery-*/
+
 # ---- 编辑器与操作系统 ----
 .vscode/
 .idea/

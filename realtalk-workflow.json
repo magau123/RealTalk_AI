@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "RealTalk_AI 实时语音翻译流程",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1200, 920]
+  },
+  "lanes": [
+    { "id": "listen", "label": "听译主链路" },
+    { "id": "reply", "label": "中文回复链路" }
+  ],
+  "phases": [
+    { "id": "capture", "label": "采集", "fromCol": 0, "toCol": 1 },
+    { "id": "translate", "label": "识别与翻译", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "present", "label": "展示与回复", "fromCol": 4, "toCol": 5 }
+  ],
+  "mainPath": [
+    "foreignAudio",
+    "pcmCapture",
+    "liveTranslate",
+    "eventPairing",
+    "conversationView",
+    "subtitleOverlay"
+  ],
+  "nodes": [
+    {
+      "id": "foreignAudio",
+      "lane": "listen",
+      "col": 0,
+      "type": "external",
+      "label": "声音输入",
+      "sublabel": "英 / 日等",
+      "width": 60
+    },
+    {
+      "id": "pcmCapture",
+      "lane": "listen",
+      "col": 1,
+      "type": "backend",
+      "label": "采集",
+      "sublabel": "16 kHz",
+      "width": 48
+    },
+    {
+      "id": "liveTranslate",
+      "lane": "listen",
+      "col": 2,
+      "type": "cloud",
+      "label": "Qwen",
+      "sublabel": "自动同传",
+      "width": 52
+    },
+    {
+      "id": "eventPairing",
+      "lane": "listen",
+      "col": 3,
+      "type": "messagebus",
+      "label": "配对",
+      "sublabel": "双流",
+      "width": 42
+    },
+    {
+      "id": "conversationView",
+      "lane": "listen",
+      "col": 4,
+      "type": "frontend",
+      "label": "记录",
+      "sublabel": "双语",
+      "width": 42
+    },
+    {
+      "id": "subtitleOverlay",
+      "lane": "listen",
+      "col": 5,
+      "type": "frontend",
+      "label": "字幕小窗",
+      "sublabel": "当前一句",
+      "width": 60
+    },
+    {
+      "id": "replyMic",
+      "lane": "reply",
+      "col": 0,
+      "type": "external",
+      "label": "中文输入",
+      "sublabel": "麦克风",
+      "width": 60
+    },
+    {
+      "id": "turnController",
+      "lane": "reply",
+      "col": 1,
+      "type": "backend",
+      "label": "半双工",
+      "sublabel": "切换通道",
+      "width": 52
+    },
+    {
+      "id": "replyTranslate",
+      "lane": "reply",
+      "col": 2,
+      "type": "cloud",
+      "label": "翻译",
+      "sublabel": "中译外",
+      "width": 52
+    },
+    {
+      "id": "speechSynthesis",
+      "lane": "reply",
+      "col": 4,
+      "type": "cloud",
+      "label": "语音合成",
+      "sublabel": "CosyVoice",
+      "width": 60
+    },
+    {
+      "id": "speakerOutput",
+      "lane": "reply",
+      "col": 5,
+      "type": "external",
+      "label": "扬声器",
+      "sublabel": "外语播报",
+      "width": 60
+    }
+  ],
+  "edges": [
+    {
+      "id": "audioToCapture",
+      "from": "foreignAudio",
+      "to": "pcmCapture",
+      "variant": "default",
+      "role": "main"
+    },
+    {
+      "id": "captureToLive",
+      "from": "pcmCapture",
+      "to": "liveTranslate",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "liveToEvents",
+      "from": "liveTranslate",
+      "to": "eventPairing",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "eventsToView",
+      "from": "eventPairing",
+      "to": "conversationView",
+      "variant": "default",
+      "role": "main"
+    },
+    {
+      "id": "viewToSubtitle",
+      "from": "conversationView",
+      "to": "subtitleOverlay",
+      "variant": "default",
+      "role": "main"
+    },
+    {
+      "id": "replyStart",
+      "from": "pcmCapture",
+      "to": "turnController",
+      "label": "我要说中文",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "replyToController",
+      "from": "replyMic",
+      "to": "turnController",
+      "variant": "default",
+      "role": "branch"
+    },
+    {
+      "id": "controllerToTranslation",
+      "from": "turnController",
+      "to": "replyTranslate",
+      "variant": "default",
+      "role": "branch"
+    },
+    {
+      "id": "translationToSpeech",
+      "from": "replyTranslate",
+      "to": "speechSynthesis",
+      "variant": "emphasis",
+      "role": "branch"
+    },
+    {
+      "id": "speechToSpeaker",
+      "from": "speechSynthesis",
+      "to": "speakerOutput",
+      "variant": "emphasis",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "听译主链路",
+      "items": [
+        "一个按钮启动或关闭检测",
+        "实时模型自动识别源语种",
+        "原文与中文译文持续刷新",
+        "字幕模式只保留最新一句"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "中文回复链路",
+      "items": [
+        "回复期间切换为中文输入",
+        "Qwen-MT 翻译为所选语言",
+        "CosyVoice 按音色流式朗读",
+        "播放期间静音上行防回声"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "本地安全边界",
+      "items": [
+        "API Key 仅从环境或 .env 读取",
+        "Qt 界面不直接接触 SDK 类型",
+        "阻塞的建连与关闭放在后台线程",
+        "测试不需要真实 API Key"
+      ]
+    }
+  ]
+}

@@ -20,6 +20,14 @@
 - **半双工会话**：听与说不同时占用识别连接，播放译文时静音上行，避免回声循环
 - **命令行探针**：不启动 GUI 即可检查配置、设备与三个模型是否可用
 
+## 项目流程
+
+![RealTalk_AI 实时语音翻译流程](docs/assets/realtalk-workflow.svg)
+
+流程分为两条链路：上方将对方语音或系统声音实时转成中文记录与字幕；下方在用户点击「我要说中文」后切换通道，将中文翻译并合成为外语播放。两条链路半双工运行，避免扬声器回声再次进入识别。
+
+Archify 交互版本保存在 [`docs/assets/realtalk-workflow.html`](docs/assets/realtalk-workflow.html)，下载后可在浏览器中查看、缩放和追踪关系；可编辑规范见 [`realtalk-workflow.json`](realtalk-workflow.json)。
+
 ## 界面怎么用
 
 1. 选择回复语言与音色、对方声音来源（系统回环或麦克风）、你的麦克风。
