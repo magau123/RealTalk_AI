@@ -26,9 +26,8 @@ SAMPLE_RATE = 16000
 CHANNELS = 1
 SAMPLE_WIDTH = 2  # 16bit PCM
 
-# 每个音频帧的采样点数。100ms 一帧，对应 3200 字节，
-# 与官方示例的 stream.read(3200) 一致，也落在「每包 1KB~16KB」的建议区间内。
-FRAMES_PER_BUFFER = 1600
+# 每个音频帧的采样点数。50ms 一帧，对应 1600 字节，减少采集后等待下一帧的延迟。
+FRAMES_PER_BUFFER = 800
 
 # CosyVoice 合成输出的采样率，用于本地播放时初始化输出流。
 TTS_SAMPLE_RATE = 22050
@@ -46,7 +45,7 @@ class Settings:
     asr_model: str = DEFAULT_ASR_MODEL
     mt_model: str = DEFAULT_MT_MODEL
     tts_model: str = DEFAULT_TTS_MODEL
-    max_end_silence: int = 800
+    max_end_silence: int = 500
     websocket_url: str | None = None
     _loaded_from: str = field(default="", repr=False, compare=False)
 
@@ -108,7 +107,7 @@ def load_settings(*, env_file: str | os.PathLike[str] | None = None) -> Settings
         asr_model=os.environ.get("REALTALK_ASR_MODEL") or DEFAULT_ASR_MODEL,
         mt_model=os.environ.get("REALTALK_MT_MODEL") or DEFAULT_MT_MODEL,
         tts_model=os.environ.get("REALTALK_TTS_MODEL") or DEFAULT_TTS_MODEL,
-        max_end_silence=_read_int("REALTALK_MAX_END_SILENCE", 800, 200, 6000),
+        max_end_silence=_read_int("REALTALK_MAX_END_SILENCE", 500, 200, 6000),
         websocket_url=(os.environ.get("REALTALK_WEBSOCKET_URL") or "").strip() or None,
         _loaded_from=str(dotenv_path) if loaded else "环境变量",
     )

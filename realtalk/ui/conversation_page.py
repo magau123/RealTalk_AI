@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterable
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -27,7 +28,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from realtalk.audio.recorder import list_input_devices
+from realtalk.audio.recorder import (
+    MACOS_SYSTEM_AUDIO_DEVICE,
+    list_input_devices,
+)
 from realtalk.config import Settings
 from realtalk.core.conversation import (
     ConversationMessage,
@@ -44,6 +48,8 @@ from realtalk.languages import (
     language_name,
 )
 from realtalk.ui.theme import SUCCESS, TEXT_MUTED, TEXT_SECONDARY, WARNING
+
+_MAX_TRANSCRIPT_BUBBLES = 250
 
 
 class MessageBubble(QFrame):
@@ -142,7 +148,18 @@ class _TranscriptArea(QScrollArea):
     滚到底看到的是空白，最新的话反而落在上面，得往回滚才看得到。
     """
 
-    def sync_content_height(self) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._height_by_widget: dict[QWidget, int] = {}
+        self._cached_height_sum = 0
+        self._cached_width: int | None = None
+
+    def sync_content_height(
+        self,
+        dirty_widgets: Iterable[QWidget] = (),
+        *,
+        force: bool = False,
+    ) -> None:
         content = self.widget()
         layout = content.layout() if content is not None else None
         if layout is None:
@@ -151,21 +168,25 @@ class _TranscriptArea(QScrollArea):
         margins = layout.contentsMargins()
         inner_width = viewport.width() - margins.left() - margins.right()
 
-        # 逐个累加子控件，不用 layout.heightForWidth()：它内部缓存在这个
-        # 时机不可靠，实测每个气泡各自报 226px，它却只给出 254px。
-        # ponytail: 只认得「一列控件 + 末尾弹簧」这一种结构，聊天记录以后
-        # 若嵌套子布局，这里要改成递归。
-        total = margins.top() + margins.bottom()
-        visible = 0
-        for index in range(layout.count()):
-            widget = layout.itemAt(index).widget()
-            if widget is None or widget.isHidden():
-                continue
-            if widget.sizePolicy().hasHeightForWidth():
-                total += widget.heightForWidth(inner_width)
-            else:
-                total += widget.sizeHint().height()
-            visible += 1
+        # 流式识别每秒会刷新多次。只重新测量新气泡和正在变化的气泡，
+        # 否则每次都遍历全部历史消息，长时间运行会变成越来越重的 O(n²) 工作。
+        if force or self._cached_width != inner_width:
+            self._height_by_widget.clear()
+            self._cached_height_sum = 0
+            for index in range(layout.count()):
+                widget = layout.itemAt(index).widget()
+                if widget is not None and not widget.isHidden():
+                    self._cache_widget_height(widget, inner_width)
+        else:
+            for widget in dirty_widgets:
+                old_height = self._height_by_widget.pop(widget, 0)
+                self._cached_height_sum -= old_height
+                if not widget.isHidden() and layout.indexOf(widget) >= 0:
+                    self._cache_widget_height(widget, inner_width)
+
+        self._cached_width = inner_width
+        visible = len(self._height_by_widget)
+        total = margins.top() + margins.bottom() + self._cached_height_sum
         if visible > 1:
             total += layout.spacing() * (visible - 1)
 
@@ -174,9 +195,17 @@ class _TranscriptArea(QScrollArea):
         # 就是滚到底后那片空白。内容不足一屏时仍撑满视口，避免底部露缝。
         content.setFixedHeight(max(total, viewport.height()))
 
+    def _cache_widget_height(self, widget: QWidget, width: int) -> None:
+        if widget.sizePolicy().hasHeightForWidth():
+            height = widget.heightForWidth(width)
+        else:
+            height = widget.sizeHint().height()
+        self._height_by_widget[widget] = height
+        self._cached_height_sum += height
+
     def resizeEvent(self, event) -> None:  # noqa: ANN001, N802
         super().resizeEvent(event)
-        self.sync_content_height()
+        self.sync_content_height(force=True)
 
 
 class ConversationPage(QWidget):
@@ -191,6 +220,7 @@ class ConversationPage(QWidget):
         self._settings = settings
         self._session: ConversationSession | None = None
         self._bubbles: dict[str, MessageBubble] = {}
+        self._layout_dirty: set[QWidget] = set()
         self._latest_message: ConversationMessage | None = None
         self._listening_requested = False
         self._subtitle_mode = False
@@ -309,7 +339,10 @@ class ConversationPage(QWidget):
         )
         loopback_index = None
         for device in devices:
-            is_loopback = "回环" in device.name
+            is_loopback = (
+                "回环" in device.name
+                or device.index == MACOS_SYSTEM_AUDIO_DEVICE
+            )
             if is_loopback:
                 self._foreign_device_combo.addItem(
                     f"🔊 {device.name}", device.index
@@ -561,6 +594,7 @@ class ConversationPage(QWidget):
 
     def _on_message_ui(self, message: ConversationMessage) -> None:
         self._placeholder.hide()
+        self._layout_dirty.add(self._placeholder)
 
         bubble = self._bubbles.get(message.message_id)
         if bubble is None or (
@@ -582,8 +616,15 @@ class ConversationPage(QWidget):
             # 量高度时会被跳过，于是滚动范围少算了整整一屏。
             bubble.show()
             at_bottom = True
+            while len(self._bubbles) > _MAX_TRANSCRIPT_BUBBLES:
+                oldest_id = next(iter(self._bubbles))
+                oldest = self._bubbles.pop(oldest_id)
+                self._transcript.removeWidget(oldest)
+                oldest.deleteLater()
+                self._layout_dirty.add(oldest)
         else:
             bubble.apply(message)
+        self._layout_dirty.add(bubble)
 
         if at_bottom:
             self._scroll_pending = True
@@ -596,7 +637,9 @@ class ConversationPage(QWidget):
 
     def _settle_transcript(self) -> None:
         self._settle_pending = False
-        self._scroll.sync_content_height()
+        dirty_widgets = tuple(self._layout_dirty)
+        self._layout_dirty.clear()
+        self._scroll.sync_content_height(dirty_widgets)
         if self._scroll_pending:
             self._scroll_pending = False
             # 高度刚改，滚动条范围要下一轮才更新，现在读 maximum() 还是旧值
@@ -694,7 +737,8 @@ class ConversationPage(QWidget):
             self._transcript.removeWidget(bubble)
             bubble.deleteLater()
         self._bubbles.clear()
+        self._layout_dirty.clear()
         self._latest_message = None
         self._update_subtitle(None)
         self._placeholder.show()
-        self._scroll.sync_content_height()
+        self._scroll.sync_content_height(force=True)

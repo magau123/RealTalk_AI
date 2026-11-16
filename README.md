@@ -16,7 +16,8 @@
 - **中文回复**：`我要说中文` 将你的话翻译并合成为对方语言朗读；支持重放
 - **字幕模式**：置顶小窗，只显示当前一句，方便对照视频或直播
 - **窗口透明度**：滑杆调节 50%–100%，叠在播放器边上不挡画面
-- **双路输入**：本机麦克风，或 Windows WASAPI 回环采集系统播放声音
+- **双路输入**：本机麦克风；Windows WASAPI 或 macOS ScreenCaptureKit 回环采集系统播放声音
+- **长时间运行**：限制界面保留的字幕数量，并在音频发送拥塞时优先处理最新声音，避免历史记录拖慢实时显示
 - **半双工会话**：听与说不同时占用识别连接，播放译文时静音上行，避免回声循环
 - **命令行探针**：不启动 GUI 即可检查配置、设备与三个模型是否可用
 
@@ -30,7 +31,7 @@ Archify 交互版本保存在 [`docs/assets/realtalk-workflow.html`](docs/assets
 
 ## 界面怎么用
 
-1. 选择回复语言与音色、对方声音来源（系统回环或麦克风）、你的麦克风。
+1. 选择回复语言与音色、对方声音来源（系统回环或麦克风）、你的麦克风。macOS 13+ 可选「系统声音」采集电脑播放的视频或会议音频。
 2. 点击 **开始检测**，对方的语音会逐句显示：小字是原文，大字是中文。
 3. 需要开口时点 **我要说中文**；说完再点按钮回到听译。
 4. 看视频或直播时打开 **字幕模式**，窗口缩小并置顶；**退出字幕** 恢复完整界面。
@@ -42,7 +43,8 @@ Archify 交互版本保存在 [`docs/assets/realtalk-workflow.html`](docs/assets
 ### 环境
 
 - Python 3.10+
-- 麦克风与扬声器（翻译电脑播放的声音时，Windows 需能枚举 WASAPI 回环设备）
+- 麦克风与扬声器（Windows 使用 WASAPI；macOS 13+ 使用 ScreenCaptureKit 采集系统声音）
+- macOS 首次采集系统声音时，允许 RealTalk 所属的终端/应用访问「屏幕与系统音频录制」；本机需有 `xcrun swiftc`（Xcode Command Line Tools）用于编译采集组件
 - 已开通[阿里云百炼](https://bailian.console.aliyun.com/)的账号
 
 ### 获取 API Key
@@ -190,10 +192,10 @@ python -m realtalk.cli check -v
 | `REALTALK_ASR_MODEL` | 否 | `qwen3.5-livetranslate-flash-realtime` | 实时识别与翻译 |
 | `REALTALK_MT_MODEL` | 否 | `qwen-mt-flash` | 文本翻译 |
 | `REALTALK_TTS_MODEL` | 否 | `cosyvoice-v2` | 语音合成 |
-| `REALTALK_MAX_END_SILENCE` | 否 | `800` | VAD 静音断句（毫秒，200–6000） |
+| `REALTALK_MAX_END_SILENCE` | 否 | `500` | VAD 静音断句（毫秒，200–6000） |
 | `REALTALK_WEBSOCKET_URL` | 否 | — | 业务空间专属 WebSocket，一般不用 |
 
-`REALTALK_MAX_END_SILENCE` 同时影响断句速度和翻译质量：切得过碎时模型看不到整句上下文。默认 800ms 是实测后的折中，不建议为了「更快出字」降到 400ms 以下。
+`REALTALK_MAX_END_SILENCE` 同时影响断句速度和翻译质量：切得过碎时模型看不到整句上下文。默认 500ms 是速度与上下文的折中，不建议降到 400ms 以下。
 
 ## 安全
 

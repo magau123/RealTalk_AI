@@ -12,10 +12,14 @@ sounddevice 的采集回调运行在 PortAudio 的实时线程上，在那里做
 from __future__ import annotations
 
 import logging
+import plistlib
 import queue
+import subprocess
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
@@ -25,10 +29,11 @@ from realtalk.config import CHANNELS, FRAMES_PER_BUFFER, SAMPLE_RATE
 logger = logging.getLogger(__name__)
 
 WASAPI_LOOPBACK_DEVICE = -1
+MACOS_SYSTEM_AUDIO_DEVICE = -2
 
-# 队列上限。每帧 100ms，200 帧约 20 秒；正常情况下队列几乎是空的，
-# 堆积说明下游发送跟不上，此时丢弃最旧的帧比无限占用内存更合理。
-_MAX_QUEUED_FRAMES = 200
+# 队列上限。每帧 50ms，最多缓存 1 秒。队列满时丢最旧帧，避免网络发送
+# 短暂变慢后一直翻译过时的声音。
+_MAX_QUEUED_FRAMES = 20
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,14 @@ def list_input_devices() -> list[AudioDevice]:
             AudioDevice(
                 index=WASAPI_LOOPBACK_DEVICE,
                 name="系统默认扬声器（WASAPI 回环）",
+                max_input_channels=2,
+            )
+        )
+    if sys.platform == "darwin":
+        devices.append(
+            AudioDevice(
+                index=MACOS_SYSTEM_AUDIO_DEVICE,
+                name="系统声音（macOS 屏幕录制权限）",
                 max_input_channels=2,
             )
         )
@@ -98,6 +111,8 @@ class MicrophoneRecorder:
         self._stream: sd.RawInputStream | None = None
         self._loopback_audio: object | None = None
         self._loopback_stream: object | None = None
+        self._system_audio_process: subprocess.Popen[bytes] | None = None
+        self._system_audio_reader: threading.Thread | None = None
         self._pump: threading.Thread | None = None
         self._running = threading.Event()
         self._dropped_frames = 0
@@ -127,6 +142,8 @@ class MicrophoneRecorder:
         try:
             if self._device == WASAPI_LOOPBACK_DEVICE:
                 self._start_loopback()
+            elif self._device == MACOS_SYSTEM_AUDIO_DEVICE:
+                self._start_macos_system_audio()
             else:
                 self._start_microphone()
         except Exception:
@@ -146,6 +163,20 @@ class MicrophoneRecorder:
         if not self._running.is_set():
             return
         self._running.clear()
+
+        if self._system_audio_process is not None:
+            process = self._system_audio_process
+            self._system_audio_process = None
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1.0)
+            if process.stdout is not None:
+                process.stdout.close()
+            self._system_audio_reader = None
 
         if self._loopback_stream is not None:
             try:
@@ -216,7 +247,22 @@ class MicrophoneRecorder:
                 )
             self._queue.put_nowait(data)
         except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(data)
+            except queue.Full:
+                # 理论上只有本线程写入队列；保留防护以处理停止期间的竞态。
+                pass
             self._dropped_frames += 1
+            if self._dropped_frames == 1 or self._dropped_frames % 20 == 0:
+                logger.warning(
+                    "音频发送落后实时进度，已丢弃 %d 帧旧音频（队列深度 %d）",
+                    self._dropped_frames,
+                    self._queue.qsize(),
+                )
 
     def _start_microphone(self) -> None:
         self._input_sample_rate = _supported_sample_rate(
@@ -262,6 +308,141 @@ class MicrophoneRecorder:
             raise
         self._loopback_audio = audio
         self._loopback_stream = stream
+
+    def _start_macos_system_audio(self) -> None:
+        if sys.platform != "darwin":
+            raise RuntimeError("macOS 系统声音采集只能在 macOS 上使用")
+
+        helper_source = Path(__file__).with_name("macos_audio_capture.swift")
+        if not helper_source.is_file():
+            raise RuntimeError(f"找不到 macOS 系统声音采集程序：{helper_source}")
+
+        cache_dir = Path.home() / "Library" / "Application Support" / "RealTalk_AI"
+        helper_app = cache_dir / "RealTalk Audio Capture.app"
+        contents_dir = helper_app / "Contents"
+        executable_dir = contents_dir / "MacOS"
+        executable_dir.mkdir(parents=True, exist_ok=True)
+        helper_binary = executable_dir / "RealTalkAudioCapture"
+        info_plist = contents_dir / "Info.plist"
+        if (
+            not helper_binary.is_file()
+            or helper_binary.stat().st_mtime < helper_source.stat().st_mtime
+            or not info_plist.is_file()
+        ):
+            try:
+                subprocess.run(
+                    [
+                        "xcrun",
+                        "swiftc",
+                        "-O",
+                        str(helper_source),
+                        "-framework",
+                        "ScreenCaptureKit",
+                        "-framework",
+                        "CoreMedia",
+                        "-framework",
+                        "CoreAudio",
+                        "-framework",
+                        "Foundation",
+                        "-o",
+                        str(helper_binary),
+                    ],
+                    check=True,
+                    timeout=120,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "macOS 系统声音采集需要 Xcode Command Line Tools（提供 xcrun swiftc）；"
+                    "请在终端运行 xcode-select --install 后重试。"
+                ) from exc
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(f"编译 macOS 声音采集组件失败：{exc}") from exc
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("编译 macOS 声音采集组件超时") from exc
+
+            info_plist.write_bytes(
+                plistlib.dumps(
+                    {
+                        "CFBundleExecutable": "RealTalkAudioCapture",
+                        "CFBundleIdentifier": "ai.realtalk.SystemAudioCapture",
+                        "CFBundleName": "RealTalk Audio Capture",
+                        "CFBundlePackageType": "APPL",
+                        "LSMinimumSystemVersion": "13.0",
+                        "NSAudioCaptureUsageDescription": (
+                            "RealTalk 需要采集电脑播放的声音，才能实时翻译视频和会议内容。"
+                        ),
+                        "NSScreenCaptureUsageDescription": (
+                            "RealTalk 使用 macOS 系统音频采集接口接收电脑播放的声音，不会读取画面。"
+                        ),
+                    }
+                )
+            )
+            try:
+                subprocess.run(
+                    ["codesign", "--force", "--deep", "--sign", "-", str(helper_app)],
+                    check=True,
+                    timeout=30,
+                )
+            except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+                raise RuntimeError(f"签名 macOS 声音采集组件失败：{exc}") from exc
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("签名 macOS 声音采集组件超时") from exc
+
+        try:
+            process = subprocess.Popen(
+                [str(helper_binary)],
+                stdout=subprocess.PIPE,
+                # Keep diagnostics visible in the terminal that launched RealTalk.
+                stderr=None,
+                bufsize=0,
+            )
+        except OSError as exc:
+            raise RuntimeError(f"启动 macOS 系统声音采集失败：{exc}") from exc
+
+        self._system_audio_process = process
+        self._input_sample_rate = self._sample_rate
+        self._input_channels = self._channels
+        self._system_audio_reader = threading.Thread(
+            target=self._read_macos_system_audio,
+            args=(process,),
+            name="realtalk-macos-audio-reader",
+            daemon=True,
+        )
+        self._system_audio_reader.start()
+        logger.info(
+            "macOS 系统声音采集已启动；首次使用需允许屏幕与系统音频录制权限"
+        )
+
+    def _read_macos_system_audio(self, process: subprocess.Popen[bytes]) -> None:
+        if process.stdout is None:
+            return
+        frame_bytes = self._frames_per_buffer * 2
+        pending = bytearray()
+        try:
+            while self._running.is_set() and process.poll() is None:
+                chunk = process.stdout.read(frame_bytes - len(pending))
+                if not chunk:
+                    break
+                pending.extend(chunk)
+                if len(pending) == frame_bytes:
+                    self._enqueue_audio(bytes(pending), source_channels=1)
+                    pending.clear()
+        except OSError as exc:
+            if self._running.is_set():
+                self._report_system_audio_error(exc)
+            return
+
+        if self._running.is_set():
+            detail = "请检查 macOS「隐私与安全性 → 屏幕与系统音频录制」权限。"
+            self._report_system_audio_error(
+                RuntimeError(f"macOS 系统声音采集已停止。{detail}")
+            )
+
+    def _report_system_audio_error(self, exc: Exception) -> None:
+        logger.error("macOS 系统声音采集失败：%s", exc)
+        self._running.clear()
+        if self._on_error is not None:
+            self._on_error(exc)
 
     def _pump_loop(self) -> None:
         while True:
