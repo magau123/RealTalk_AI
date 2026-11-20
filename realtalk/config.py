@@ -9,12 +9,20 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def default_env_path() -> Path:
+    """独立 Mac 应用从用户目录加载配置，应用包内不保存 API Key。"""
+    if getattr(sys, "frozen", False) and sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "RealTalk_AI" / ".env"
+    return PROJECT_ROOT / ".env"
 
 # Qwen3.5 LiveTranslate 是官方当前推荐的实时同传模型，内置 Qwen3 ASR。
 DEFAULT_ASR_MODEL = "qwen3.5-livetranslate-flash-realtime"
@@ -82,7 +90,7 @@ def _read_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 def load_settings(*, env_file: str | os.PathLike[str] | None = None) -> Settings:
     """读取配置。缺少 API Key 时抛出带操作指引的 ConfigError。"""
-    dotenv_path = Path(env_file) if env_file is not None else PROJECT_ROOT / ".env"
+    dotenv_path = Path(env_file) if env_file is not None else default_env_path()
     # override=False：已经存在的进程环境变量优先，方便 CI 和临时覆盖
     loaded = load_dotenv(dotenv_path, override=False)
 
@@ -91,7 +99,7 @@ def load_settings(*, env_file: str | os.PathLike[str] | None = None) -> Settings
         raise ConfigError(
             "未找到 DASHSCOPE_API_KEY。\n"
             f"请把 {PROJECT_ROOT / '.env.example'} 复制为 "
-            f"{PROJECT_ROOT / '.env'} 并填入你的百炼 API Key，\n"
+            f"{dotenv_path} 并填入你的百炼 API Key，\n"
             "或直接设置环境变量：\n"
             '  PowerShell:  $env:DASHSCOPE_API_KEY = "sk-..."\n'
             '  bash/zsh:    export DASHSCOPE_API_KEY="sk-..."\n'

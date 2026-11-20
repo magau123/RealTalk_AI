@@ -241,6 +241,14 @@ class ListenSession:
     def unmute(self) -> None:
         self._muted.clear()
 
+    def set_input_enabled(self, enabled: bool) -> None:
+        self._recorder.set_input_enabled(enabled)
+
+    def finish_input(self) -> None:
+        self._recorder.set_input_enabled(False)
+        if not self._recorder.flush_pending():
+            logger.warning("等待末尾语音发送超时，将提交已发送部分")
+
     @property
     def is_muted(self) -> bool:
         return self._muted.is_set()

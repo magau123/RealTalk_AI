@@ -12,11 +12,13 @@ sounddevice 的采集回调运行在 PortAudio 的实时线程上，在那里做
 from __future__ import annotations
 
 import logging
+import hashlib
 import plistlib
 import queue
 import subprocess
 import sys
 import threading
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -107,7 +109,7 @@ class MicrophoneRecorder:
         self._frames_per_buffer = frames_per_buffer
         self._device = device
 
-        self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=_MAX_QUEUED_FRAMES)
+        self._queue: queue.Queue[bytes | threading.Event | None] = queue.Queue(maxsize=_MAX_QUEUED_FRAMES)
         self._stream: sd.RawInputStream | None = None
         self._loopback_audio: object | None = None
         self._loopback_stream: object | None = None
@@ -115,6 +117,8 @@ class MicrophoneRecorder:
         self._system_audio_reader: threading.Thread | None = None
         self._pump: threading.Thread | None = None
         self._running = threading.Event()
+        self._input_enabled = threading.Event()
+        self._input_enabled.set()
         self._dropped_frames = 0
 
     @property
@@ -237,6 +241,9 @@ class MicrophoneRecorder:
         return None, pyaudio.paContinue
 
     def _enqueue_audio(self, data: bytes, source_channels: int) -> None:
+        # 在采集端屏蔽未按键期间的声音；已入队的语音仍可发完并继续翻译。
+        if not self._input_enabled.is_set():
+            data = bytes(len(data))
         try:
             if source_channels > 1:
                 samples = np.frombuffer(data, dtype="<i2").reshape(-1, source_channels)
@@ -263,6 +270,24 @@ class MicrophoneRecorder:
                     self._dropped_frames,
                     self._queue.qsize(),
                 )
+
+    def set_input_enabled(self, enabled: bool) -> None:
+        """控制新采集的语音是否进入翻译；关闭时发送静音供 VAD 断句。"""
+        if enabled:
+            self._input_enabled.set()
+        else:
+            self._input_enabled.clear()
+
+    def flush_pending(self, timeout: float = 2.0) -> bool:
+        """等待松键前已采集的帧发送完，再提交整段语音，避免截掉尾音。"""
+        if not self._running.is_set():
+            return True
+        marker = threading.Event()
+        try:
+            self._queue.put(marker, timeout=timeout)
+        except queue.Full:
+            return False
+        return marker.wait(timeout)
 
     def _start_microphone(self) -> None:
         self._input_sample_rate = _supported_sample_rate(
@@ -312,6 +337,11 @@ class MicrophoneRecorder:
     def _start_macos_system_audio(self) -> None:
         if sys.platform != "darwin":
             raise RuntimeError("macOS 系统声音采集只能在 macOS 上使用")
+
+        if getattr(sys, "frozen", False):
+            helper_binary = self._bundled_macos_capture_binary()
+            self._launch_macos_system_audio(helper_binary)
+            return
 
         helper_source = Path(__file__).with_name("macos_audio_capture.swift")
         if not helper_source.is_file():
@@ -388,6 +418,28 @@ class MicrophoneRecorder:
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError("签名 macOS 声音采集组件超时") from exc
 
+        self._launch_macos_system_audio(helper_binary)
+
+    @staticmethod
+    def _bundled_macos_capture_binary() -> Path:
+        """发布应用内含预编译组件，用户不需要安装 Xcode 或 Swift。"""
+        archive = Path(__file__).with_name("macos_audio_helper.zip")
+        if not archive.is_file():
+            raise RuntimeError("应用缺少系统声音采集组件，请重新安装 RealTalk")
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()[:16]
+        directory = (
+            Path.home() / "Library" / "Application Support" / "RealTalk_AI"
+            / "AudioCapture" / digest
+        )
+        binary = directory / "RealTalk Audio Capture.app" / "Contents" / "MacOS" / "RealTalkAudioCapture"
+        if not binary.is_file():
+            directory.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(directory)
+            binary.chmod(0o755)
+        return binary
+
+    def _launch_macos_system_audio(self, helper_binary: Path) -> None:
         try:
             process = subprocess.Popen(
                 [str(helper_binary)],
@@ -461,6 +513,9 @@ class MicrophoneRecorder:
 
             if frame is None:
                 return
+            if isinstance(frame, threading.Event):
+                frame.set()
+                continue
             if not self._running.is_set():
                 return
 

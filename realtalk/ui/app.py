@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -14,10 +16,18 @@ logger = logging.getLogger(__name__)
 
 
 def run(argv: list[str] | None = None) -> int:
+    handlers = None
+    if getattr(sys, "frozen", False) and sys.platform == "darwin":
+        log_dir = Path.home() / "Library" / "Logs" / "RealTalk_AI"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handlers = [RotatingFileHandler(
+            log_dir / "RealTalk.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+        )]
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
         datefmt="%H:%M:%S",
+        handlers=handlers,
     )
 
     app = QApplication(argv if argv is not None else sys.argv)

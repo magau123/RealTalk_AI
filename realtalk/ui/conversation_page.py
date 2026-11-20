@@ -214,6 +214,7 @@ class ConversationPage(QWidget):
     _errorOccurred = Signal(object)
     opacityChanged = Signal(int)
     subtitleModeChanged = Signal(bool)
+    englishSubtitlesRequested = Signal()
 
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -289,6 +290,14 @@ class ConversationPage(QWidget):
         title_column.addWidget(subtitle)
         row.addLayout(title_column)
         row.addStretch(1)
+
+        self._english_subtitles_button = QPushButton("翻译模式")
+        self._english_subtitles_button.setObjectName("QuietButton")
+        self._english_subtitles_button.setToolTip(
+            "Teams 中按住 Ctrl＋Option＋空格 说中文；英文悬浮显示，不播放语音"
+        )
+        self._english_subtitles_button.clicked.connect(self.englishSubtitlesRequested.emit)
+        row.addWidget(self._english_subtitles_button)
 
         self._subtitle_button = QPushButton("字幕模式")
         self._subtitle_button.setObjectName("QuietButton")
@@ -590,6 +599,14 @@ class ConversationPage(QWidget):
         if session is not None:
             session.shutdown()
 
+    def pause_for_english_subtitles(self):  # noqa: ANN201
+        """在 UI 线程撤下旧会话，返回由新模式后台线程执行的清理函数。"""
+        self._listening_requested = False
+        session, self._session = self._session, None
+        self._refresh_action_buttons()
+        self._set_status("已切换到翻译模式。", TEXT_MUTED)
+        return session.shutdown if session is not None else None
+
     # ---- 槽函数，全部运行在 UI 线程 ----
 
     def _on_message_ui(self, message: ConversationMessage) -> None:
@@ -721,6 +738,7 @@ class ConversationPage(QWidget):
         button.style().polish(button)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
+        self._english_subtitles_button.setEnabled(enabled)
         self._listen_button.setEnabled(enabled)
         self._speak_button.setEnabled(enabled)
         self._language_combo.setEnabled(enabled)

@@ -100,6 +100,13 @@ class QwenLiveTranslateSession:
                 output_modalities=[MultiModality.TEXT],
                 voice="Tina",
                 input_audio_transcription_model="qwen3-asr-flash-realtime",
+                input_audio_transcription={
+                    "model": "qwen3-asr-flash-realtime",
+                    **(
+                        {"language": self._source_language}
+                        if self._source_language != "auto" else {}
+                    ),
+                },
                 translation_params=TranslationParams(
                     language=self._target_language
                 ),
@@ -137,6 +144,14 @@ class QwenLiveTranslateSession:
 
     def mute(self) -> None:
         self._muted.set()
+
+    def set_input_enabled(self, enabled: bool) -> None:
+        self._recorder.set_input_enabled(enabled)
+
+    def finish_input(self) -> None:
+        self._recorder.set_input_enabled(False)
+        if not self._recorder.flush_pending():
+            logger.warning("等待末尾语音发送超时，将提交已发送部分")
 
     def unmute(self) -> None:
         self._muted.clear()
